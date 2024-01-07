@@ -1,10 +1,20 @@
 import tools
+from opentelemetry import metrics
+from opentelemetry import trace
+import logging
+
+logging.basicConfig(format='[%(asctime)s] p%(process)s {%(filename)s:%(lineno)d} %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Creates a tracer from the global tracer provider
+tracer = trace.get_tracer("appl.tracer")
 
 
+@tracer.start_as_current_span("lambda_handler")
 def handler(event, context):
     # Print the received event to the logs
-    print("Received event: ")
-    print(event)
+    logger.info("Received event: ")
+    logger.info(event)
 
     # Initialize response code to None
     response_code = None
@@ -16,22 +26,20 @@ def handler(event, context):
     inputText = event["inputText"]
     httpMethod = event["httpMethod"]
 
-    print(f"inputText: {inputText}")
+    logger.info(f"inputText: {inputText}")
 
     # Get the query value from the parameters
     query = parameters[0]["value"]
-    print(f"Query: {query}")
+    logger.info(f"Query: {query}")
 
     # Check the api path to determine which tool function to call
-    if api_path == "/query_well_arch_framework":
-        # Call the aws_well_arch_tool from the tools module with the query
-        body = tools.aws_well_arch_tool(query)
+    if api_path == "/get_investment_research":
+        body = tools.get_investment_research(query)
         # Create a response body with the result
         response_body = {"application/json": {"body": str(body)}}
         response_code = 200
-    elif api_path == "/gen_code":
-        # Call the code_gen_tool from the tools module with the query
-        body = tools.code_gen_tool(query)
+    elif api_path == "/get_existing_portfolio":
+        body = tools.get_existing_portfolio(query)
         # Create a response body with the result
         response_body = {"application/json": {"body": str(body)}}
         response_code = 200
@@ -42,7 +50,7 @@ def handler(event, context):
         response_body = {"application/json": {"body": str(body)}}
 
     # Print the response body to the logs
-    print(f"Response body: {response_body}")
+    logger.info(f"Response body: {response_body}")
 
     # Create a dictionary containing the response details
     action_response = {
@@ -55,5 +63,6 @@ def handler(event, context):
 
     # Return the list of responses as a dictionary
     api_response = {"messageVersion": "1.0", "response": action_response}
+    logger.info(f"API response: {api_response}")
 
     return api_response

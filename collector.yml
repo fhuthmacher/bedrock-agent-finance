@@ -1,0 +1,46 @@
+#collector.yaml in the root directory
+#Set an environment variable 'OPENTELEMETRY_COLLECTOR_CONFIG_FILE' to '/var/task/collector.yaml'
+extensions:
+# https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/extension/sigv4authextension/README.md
+  sigv4auth:
+    region: "us-east-1"
+    service: "osis"
+
+receivers:
+  otlp:
+    protocols:
+
+      http:
+        endpoint:
+
+exporters:
+  logging:
+    loglevel: debug
+
+  otlphttp:
+    auth:
+      authenticator: sigv4auth
+    compression: none 
+    traces_endpoint: ${TRACE_ENDPOINT}
+    metrics_endpoint: ${METRICS_ENDPOINT}
+    logs_endpoint: ${LOGS_ENDPOINT} 
+
+    
+service:
+  extensions: [sigv4auth]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp]
+
+    metrics:
+      receivers: [otlp]
+      exporters: [otlphttp]
+    
+    logs:
+      receivers: [otlp]
+      exporters: [otlphttp]
+      
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888

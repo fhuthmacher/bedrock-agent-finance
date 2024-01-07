@@ -1,21 +1,21 @@
 {
     "openapi": "3.0.0",
     "info": {
-        "title": "Agent AWS API",
+        "title": "Agent-Finance",
         "version": "1.0.0",
-        "description": "APIs helpeing customers with knowledge of AWS by querying the AWS Well-Architected Framework, writing code, and creating diagrams."
+        "description": "Agent Finance is an automated, AI-powered agent that helps a portfolio owner with knowledge of public financial information about companies and the investor's existing investment portfolio and then provides financial investment advice accordingly."
     },
     "paths": {
-        "/query_well_arch_framework": {
+        "/get_investment_research": {
             "get": {
-                "summary": "Query the the AWS Well-Architected Framework to answer a customer question.",
-                "description": "Query the the AWS Well-Architected Framework to answer a customer question. The API takes in the customer query then returns the answer and list of documents.",
-                "operationId": "queryWellArch",
+                "summary": "Financial investment research",
+                "description": "Get public financial information of a company to answer a question. The API takes in the query then returns the corresponding financial public information",
+                "operationId": "financialInformation",
                 "parameters": [
                     {
                         "name": "query",
                         "in": "path",
-                        "description": "Customer query",
+                        "description": "query",
                         "required": true,
                         "schema": {
                             "type": "string"
@@ -24,7 +24,7 @@
                 ],                
                 "responses": {
                     "200": {
-                        "description": "Query the the AWS Well-Architected Framework to answer a customer question.",
+                        "description": "Public financial information of the company",
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -32,43 +32,7 @@
                                     "properties": {
                                         "answer": {
                                             "type": "string",
-                                            "description": "The response to customer query and list of documents cited."
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/gen_code": {
-            "get": {
-                "summary": "Generate code for the customer",
-                "description": "Write code for the customer. The API takes in the customer query and returns the code for the customer.",
-                "operationId": "genCode",
-                "parameters": [
-                    {
-                        "name": "query",
-                        "in": "path",
-                        "description": "Customer query",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Code customer requested",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "code": {
-                                            "type": "string",
-                                            "description": "The code customer requested"
+                                            "description": "Public financial information of the company."
                                         }
                                     }
                                 }
@@ -78,5 +42,42 @@
                 }
             }
         }
+        ,
+        "/get_existing_portfolio": {
+        "get": {
+            "summary": "Get existing investment portfolio of the user from the tools module with the query",
+            "description": "Get existing investment portfolio of the user from the tools module with the query to check diversification. The API takes in the username and returns the user's investment portfolio along with the percentage of holdings",
+            "operationId": "portfolio",
+            "parameters": [
+                {
+                    "name": "username",
+                    "in": "path",
+                    "description": "username",
+                    "required": true,
+                    "schema": {
+                        "type": "string"
+                    }
+                }
+            ],
+            "responses": {
+                "200": {
+                    "description": "Existing portfolio of the user",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "code": {
+                                        "type": "string",
+                                        "description": "Investment Portfolio"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            }
+        }  
     }
 }
