@@ -1,0 +1,1130 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Amazon Bedrock Agents with Observability Tutorial
+Parameters:
+  EnvironmentTag:
+    Description: Enter Environment Tag
+    Type: String
+    Default: 'dev'
+  CIDRPrefix:
+    Description: 'Enter Class B CIDR Prefix (e.g. 192.168, 10.1, 172.16)'
+    Type: String
+    AllowedPattern: '(192\.168)|10\.[0-9][0-9]{0,1}|(172\.([1][6-9]|[2][0-9]|[3][0-1]))'
+    ConstraintDescription: >-
+      must be a valid Private Subnet CIDR Prefix between 192.168 or 10.{0-99} or
+      172.16
+    Default: '192.168'
+  DomainName:
+    Description: User-defined OpenSearch domain name
+    Type: String
+    Default: 'observability-demo'
+  ECRRepoName:
+    Description: ECR repo name
+    Type: String
+    Default: 'bedrock_tools'
+  InstanceType:
+    Description: OpenSearchService EC2 instance type
+    Type: String
+    Default: 'r6g.large.search'
+  EEKeyPair:
+    Description: Amazon EC2 Key Pair
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    Default: 'felixh'
+    MinLength: 1
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    AllowedValues:
+      - /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    Description: Image ID for the EC2 helper instance. DO NOT change this.
+  AgentFoundationModel:
+    Description: Amazon Bedrock Agent Foundation Model
+    Type: String
+    Default: 'anthropic.claude-instant-v1'
+  AgentName:
+    Description: Amazon Bedrock Agent Name
+    Type: String
+    Default: 'Agent_Finance'
+  AgentInstruction:
+    Description: Amazon Bedrock Agent Instruction
+    Type: String
+    Default: 'Agent Finance is an automated, AI-powered agent that helps customers with financial investments.'
+  AgentActionGroupName:
+    Description: Amazon Bedrock Agent ActionGroupName
+    Type: String
+    Default: 'Agent Finance'
+  KnowledgeBaseName:
+    Description: Amazon Bedrock KnowledgeBase Name
+    Type: String
+    Default: 'Finance_KB'
+  KnowledgeBaseDescription:
+    Description: Amazon Bedrock KnowledgeBase Description
+    Type: String
+    Default: 'This knowledge base contains financial information.'    
+Resources:
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: !Join 
+        - ''
+        - - !Ref CIDRPrefix
+          - .0.0/21
+      EnableDnsHostnames: 'true'
+      EnableDnsSupport: 'true'
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-vpc'
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-igw'
+  AttachInternetGateway:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  PublicSubnet0:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select 
+        - '0'
+        - !GetAZs ''
+      CidrBlock: !Join 
+        - ''
+        - - !Ref CIDRPrefix
+          - .0.0/24
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-sn-pub0'
+  PublicSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select 
+        - '1'
+        - !GetAZs ''
+      CidrBlock: !Join 
+        - ''
+        - - !Ref CIDRPrefix
+          - .1.0/24
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-sn-pub1'
+  PublicSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select 
+        - '2'
+        - !GetAZs ''
+      CidrBlock: !Join 
+        - ''
+        - - !Ref CIDRPrefix
+          - .2.0/24
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-sn-pub2'
+  PrivateSubnetApp0:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select 
+        - '0'
+        - !GetAZs ''
+      CidrBlock: !Join 
+        - ''
+        - - !Ref CIDRPrefix
+          - .4.0/24
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-sn-priv-app0'
+  PrivateSubnetApp1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select 
+        - '1'
+        - !GetAZs ''
+      CidrBlock: !Join 
+        - ''
+        - - !Ref CIDRPrefix
+          - .5.0/24
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-sn-priv-app1'
+  PrivateSubnetApp2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select 
+        - '2'
+        - !GetAZs ''
+      CidrBlock: !Join 
+        - ''
+        - - !Ref CIDRPrefix
+          - .6.0/24
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-sn-priv-app2'
+  PublicRoutingTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-rtbl-pub'
+  PublicRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicRoutingTable
+  PublicRouteAssociation0:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PublicRoutingTable
+      SubnetId: !Ref PublicSubnet0
+  PublicRouteAssociation1:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PublicRoutingTable
+      SubnetId: !Ref PublicSubnet1
+  PublicRouteAssociation2:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PublicRoutingTable
+      SubnetId: !Ref PublicSubnet2
+  PrivateRoutingTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-rtbl-priv'
+  NATGatewayIPAddress:
+    Type: 'AWS::EC2::EIP'
+    DependsOn: AttachInternetGateway
+    Properties:
+      Domain: vpc
+  NATGateway:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt 
+        - NATGatewayIPAddress
+        - AllocationId
+      SubnetId: !Ref PublicSubnet0
+  PrivateRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+      RouteTableId: !Ref PrivateRoutingTable
+  PrivateRouteAssociationApp0:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PrivateRoutingTable
+      SubnetId: !Ref PrivateSubnetApp0
+  PrivateRouteAssociationApp1:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PrivateRoutingTable
+      SubnetId: !Ref PrivateSubnetApp1
+  PrivateRouteAssociationApp2:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PrivateRoutingTable
+      SubnetId: !Ref PrivateSubnetApp2
+
+
+  OpenSearchServiceDomain:
+    Type: 'AWS::OpenSearchService::Domain'
+    Properties:
+      DomainName: !Ref DomainName
+      EngineVersion: OpenSearch_2.11
+      ClusterConfig:
+        InstanceCount: 1
+        InstanceType: !Ref InstanceType
+      EBSOptions:
+        EBSEnabled: 'true'
+        Iops: '3000'
+        VolumeSize: 100
+        VolumeType: 'gp3'
+      AdvancedOptions:
+        rest.action.multi.allow_explicit_index: 'true'
+        override_main_response_version: 'true'      
+      AccessPolicies:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: "*"
+            Action:
+              - 'es:*'
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:es:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':domain/'
+                - !Ref DomainName
+                - /*
+      VPCOptions:
+        SubnetIds:
+          - !Ref PrivateSubnetApp1
+        SecurityGroupIds:
+          - !Ref opsSecurityGroup
+
+  opsSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Security group for OpenSearch service
+      VpcId: !Ref VPC
+      GroupName: !Sub 
+        - 'secgr-${SgName}'
+        - SgName: !Ref DomainName
+      SecurityGroupIngress:
+        - FromPort: 443
+          IpProtocol: tcp
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: True
+        BlockPublicPolicy: True
+        IgnorePublicAcls: True
+        RestrictPublicBuckets: True
+
+# ecr repository
+  AgentToolsRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref ECRRepoName
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: MUTABLE
+
+  # CommandRunner:
+  #   Type: AWSUtility::CloudFormation::CommandRunner
+  #   Properties:
+  #     Command: 'docker pull felix85/bedrock_tools'
+
+# resource to push docker image to ECR
+  EC2InstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: /
+      Roles:
+        - !Ref BedrockAgentToolsFunctionRole
+
+  DockerPushInstance:
+    Type: 'AWS::EC2::Instance'
+    DependsOn:
+      - BedrockAgentToolsFunctionRole
+    Properties:
+      InstanceType: t2.small
+      ImageId: !Ref LatestAmiId
+      KeyName: !Ref EEKeyPair
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: 'true'
+          DeviceIndex: '0'
+          GroupSet:
+            - !Ref opsSecurityGroup
+          SubnetId: !Ref PublicSubnet1
+      UserData: !Base64 
+        'Fn::Join':
+          - ''
+          - - |
+              #!/bin/bash -ex
+            - |
+              'sudo yum update -y && sudo amazon-linux-extras install docker && sudo service docker start && sudo usermod -a -G docker ec2-user
+            - |
+              'docker pull felix85/bedrock_tools'
+            - |
+              'docker tag felix85/bedrock_tools felix85/bedrock_tools:latest '
+            - !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}"
+            - |
+              'docker push '
+            - !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}"
+            
+      Tags:
+        - Key: Name
+          Value: ECR-Loader
+
+
+  # # Setup cloud9 environment
+  # Cloud9Environment:
+  #   Type: AWS::Cloud9::EnvironmentEC2
+  #   Properties:
+  #     AutomaticStopTimeMinutes: 30
+  #     Description: 'Tutorial Cloud9 IDE'
+  #     InstanceType: m5.large
+  #     Name: 'Tutorial-Cloud9'
+  #     ImageId: amazonlinux-2-x86_64
+  #     SubnetId: !Ref   PublicSubnet1
+
+# lambda function for Bedrock Agent
+  BedrockAgentToolsLambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: 
+      - DockerPushInstance
+      - LambdaSetupFunction
+    Properties:
+      Code:
+        ImageUri: !GetAtt AgentToolsRepository.RepositoryUri
+      PackageType: Image
+      Role: !GetAtt BedrockAgentToolsFunctionRole.Arn
+      VpcConfig:
+          SecurityGroupIds: 
+            - !Ref opsSecurityGroup
+          SubnetIds:
+            - !Ref PrivateSubnetApp1
+      Environment:
+        Variables:
+          AWS_LAMBDA_EXEC_WRAPPER: '/opt/otel-instrument'
+          OPENTELEMETRY_COLLECTOR_CONFIG_FILE: '/var/task/collector.yaml'
+          OTEL_SERVICE_NAME: 'FinancialAgent'
+      Timeout: 900
+      EphemeralStorage: 
+        Size: 1028
+      MemorySize: '1028'
+
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref BedrockAgentToolsLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: "bedrock.amazonaws.com"  
+
+# Lambda role
+  BedrockAgentToolsFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - bedrock.amazonaws.com
+                - athena.amazonaws.com
+                - opensearchservice.amazonaws.com
+                - es.amazonaws.com
+                - osis.amazonaws.com
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+        - 'arn:aws:iam::aws:policy/AWSLambda_FullAccess'
+        - 'arn:aws:iam::aws:policy/SecretsManagerReadWrite'
+      Policies:
+        - PolicyName: ECRGetAuthorizationToken
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:*
+                Resource: "*"
+        - PolicyName: GlueAthenaBedrockAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeAgent
+                  - glue:GetTables
+                  - glue:GetTable
+                  - glue:CreateDatabase
+                  - athena:GetWorkGroup
+                  - athena:StartQueryExecution
+                  - athena:CancelQueryExecution
+                  - athena:StopQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:ListDataCatalogs
+                  - athena:ListWorkGroups
+                  - athena:UpdateWorkGroup
+                Resource: "*"
+        - PolicyName: OpenSearchIngestionAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - osis:Ingest
+                Resource: "*"
+        - PolicyName: CloudWatchAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+        - PolicyName: opensearch
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - 'aoss:*'
+              Resource:
+              - !Sub '${TestCollection.Arn}*'
+        - PolicyName: s3access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - 's3:Get*'
+              - 's3:List*'
+              Resource:
+              - !Sub '${DataBucket.Arn}/*'
+              - !Sub '${DataBucket.Arn}'    
+
+  TestCollection:
+    Type: 'AWS::OpenSearchServerless::Collection'
+    Properties:
+      Name: !Sub vector-${AWS::StackName}
+      Type: VECTORSEARCH
+      Description: Opensearch Vector Collection for FinOps Chat
+    DependsOn: EncryptionPolicy
+
+  EncryptionPolicy:
+    Type: 'AWS::OpenSearchServerless::SecurityPolicy'
+    Properties:
+      Name: !Sub ${AWS::StackName}-encrypt
+      Type: encryption
+      Description: !Sub Encryption policy for !Sub vector-${AWS::StackName}
+      Policy: !Sub >-
+        {"Rules":[{"ResourceType":"collection","Resource":["collection/vector-${AWS::StackName}"]}],"AWSOwnedKey":true}
+  
+  NetworkPolicy:
+    Type: 'AWS::OpenSearchServerless::SecurityPolicy'
+    Properties:
+      Name: !Sub ${AWS::StackName}-security
+      Type: network
+      Description: !Sub Security policy for !Sub vector-${AWS::StackName}
+      Policy: !Sub >-
+        [{"Rules":[{"ResourceType":"collection","Resource":["collection/vector-${AWS::StackName}"]}, {"ResourceType":"dashboard","Resource":["collection/vector-${AWS::StackName}"]}],"AllowFromPublic":true}]
+  
+  TestAccessPolicy:
+    Type: 'AWS::OpenSearchServerless::AccessPolicy'
+    Properties:
+      Name: !Sub ${AWS::StackName}-access
+      Type: data
+      Description: !Sub Access policy for !Sub vector-${AWS::StackName}
+      Policy: !Sub >-
+        [{"Description":"Access for test-user","Rules":[{"ResourceType":"index","Resource":["index/*/*"],"Permission":["aoss:*"]},
+        {"ResourceType":"collection","Resource":["collection/vector-${AWS::StackName}"],"Permission":["aoss:*"]}],
+        "Principal":["${BedrockAgentToolsFunctionRole.Arn}"]}]
+
+
+  LambdaSetupFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: 
+      - BedrockAgentToolsFunctionRole
+      - DataBucket
+    Properties:
+        Description: ""
+        FunctionName: !Join ['_', ['setup_lambda', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+        Handler: "index.lambda_handler"
+        Code: 
+            ZipFile : |
+              import json
+              import boto3
+              import os
+              import cfnresponse
+              import string
+              import random
+              import urllib3
+              import shutil
+              import time
+
+
+              def wait_for_crawler_creation(crawler_name):
+                  glue_client = boto3.client('glue')
+
+                  waiter = glue_client.get_waiter('crawler_exists')
+                  waiter.wait(
+                      CrawlerNameList=[crawler_name],
+                      WaiterConfig={
+                          'Delay': 10,
+                          'MaxAttempts': 30
+                      }
+                  )
+
+              def run_glue_crawler(crawler_name):
+                  glue_client = boto3.client('glue')
+
+                  response = glue_client.start_crawler(
+                      Name=crawler_name
+                  )
+
+                  return response
+                  
+              def download_public_files(src,tgt):
+                  http = urllib3.PoolManager()
+                  with open("/tmp/"+tgt, 'wb') as out:
+                    r = http.request('GET', src, preload_content=False)
+                    shutil.copyfileobj(r, out)
+                  return "Files Downloaded Locally"
+
+              def empty_bucket(bucket_name,region_name,account_id):
+                  try:
+                    s3 = boto3.resource('s3')
+                    bucket = s3.Bucket(bucket_name)
+                    bucket.objects.all().delete()  
+                    
+                  except Exception as e:
+                    print(str(e))
+                  return "Bucket {} Emptied ".format(bucket_name) 
+
+              def drop_database(GlueDatabaseName, pattern):
+                  try:
+                    glue = boto3.client('glue')
+                    db_name = GlueDatabaseName+pattern
+                    glue.delete_database(Name=db_name) 
+                  except Exception as e:
+                    print(str(e))
+                  return "DB {} Deleted ".format(db_name)  
+
+              def delete_crawler(pattern):
+                  crawler_name= "glue-etl-redshift-"+pattern
+                  try:
+                    glue = boto3.client('glue')
+                    glue.delete_crawler(Name=crawler_name)
+                  except Exception as e:
+                    print(str(e))
+                  return "Crawler {} deleted ".format(crawler_name) 
+                    
+              def configure_athena_result_location(bucket_name):
+                  print('start athena result location configuration')
+                  client = boto3.client('athena')
+                  try:
+                      response = client.get_work_group(WorkGroup='primary')
+                      ConfigurationUpdates={}
+                      ConfigurationUpdates['EnforceWorkGroupConfiguration']= True
+                      ResultConfigurationUpdates= {}
+                      athena_location = "s3://"+ bucket_name +"/athena_results/"
+                      ResultConfigurationUpdates['OutputLocation']=athena_location
+                      EngineVersion = response['WorkGroup']['Configuration']['EngineVersion']
+                      ConfigurationUpdates['ResultConfigurationUpdates']=ResultConfigurationUpdates
+                      ConfigurationUpdates['PublishCloudWatchMetricsEnabled']= response['WorkGroup']['Configuration']['PublishCloudWatchMetricsEnabled']
+                      ConfigurationUpdates['EngineVersion']=EngineVersion
+                      ConfigurationUpdates['RequesterPaysEnabled']= response['WorkGroup']['Configuration']['RequesterPaysEnabled']
+                      response2 = client.update_work_group(WorkGroup='primary',ConfigurationUpdates=ConfigurationUpdates,State='ENABLED')
+                  except Exception as e:
+                    print(str(e))
+                  
+                  print("athena output location updated")
+                  return "athena output location updated to s3://{}/athena_results/".format(bucket_name)                                 
+
+              def provision_s3_dirs(bucket_name,region_name,account_id,ret_dict):
+                  print("BUCKET NAME IS "+bucket_name)
+                  
+                  s3 = boto3.client('s3')
+                  try:
+                    s3.put_object(Bucket=bucket_name, Key=("code/"))
+                    s3.put_object(Bucket=bucket_name, Key=("athena_results/"))
+                    s3.put_object(Bucket=bucket_name, Key=("data/"))
+                    s3.put_object(Bucket=bucket_name, Key=("kb/"))
+
+                  except Exception as e:
+                    print(str(e))
+                  
+                  try:
+                      assets3 = boto3.resource('s3')
+                      if assets3.Bucket(bucket_name).creation_date is None:
+                        if region_name == 'us-east-1':
+                            print('trying to create bucket')
+                            assets3.create_bucket(Bucket=bucket_name)
+                        else:
+                            print('other region')
+                            assets3.create_bucket(Bucket=bucket_name,CreateBucketConfiguration={'LocationConstraint':region_name})
+                        print("Asset bucket {} doesn't exists, created".format(bucket_name))
+                        time.sleep(20)
+                        print("End Timed wait after Asset bucket created")
+                  except Exception as e:
+                      print(str(e))
+                  
+                  configure_athena_result_location(bucket_name)
+                  
+                  ret_dict["WorkshopBucket"]=bucket_name
+                  return ret_dict
+
+              def deploy_assets(bucket_name,region_name,account_id,role_arn, ret_dict):
+                  print("deploy assets to bucket: "+bucket_name)
+                  try :
+                      download_public_files("https://d3q8adh3y5sxpk.cloudfront.net/tutorial/stock_portfolio.csv","stock_portfolio.csv")
+                      download_public_files("https://d3q8adh3y5sxpk.cloudfront.net/tutorial/amazon_10k_2023.pdf","amazon_10k_2023.pdf")
+                      download_public_files("https://d3q8adh3y5sxpk.cloudfront.net/tutorial/agent_aws_openapi.json","agent_aws_openapi.json")
+                      s3_client = boto3.client('s3')
+                      s3_client.upload_file('/tmp/stock_portfolio.csv', bucket_name, 'data/stock_portfolio.csv')
+                      s3_client.upload_file('/tmp/amazon_10k_2023.pdf', bucket_name, 'kb/amazon_10k_2023.pdf')
+                      s3_client.upload_file('/tmp/agent_aws_openapi.json', bucket_name, 'code/agent_aws_openapi.json')
+
+                  except Exception as e:
+                      print("Failed provisioning assets "+str(e))
+                  
+                  return ret_dict
+
+              def create_glue_database(bucket_name,GlueDatabaseName, pattern,ret_dict):
+                  print("create Glue database: "+GlueDatabaseName)
+                  try :
+                      glue = boto3.client('glue')
+                      db_name = GlueDatabaseName+pattern
+                      db_location = "s3://"+ bucket_name +"/database_path/glue-etl-redshift/"
+                      glue.create_database(DatabaseInput={'Name': db_name,'LocationUri': db_location})
+                  except Exception as e:
+                      print("Failed provisioning glue database "+str(e))
+                  ret_dict["DatabaseName"]=db_name
+                  return ret_dict
+
+              
+              def deploy_and_run_glue_crawler(role_arn, pattern, GlueDatabaseName, bucket_name, ret_dict):
+                  print("start Glue crawler creation")
+                  crawler_name = "stockportfolio-"+pattern
+                  db_name = GlueDatabaseName+pattern
+                  print("GlueDatabaseName: " + str(db_name))
+                  ret_dict["CrawlerName"]=crawler_name
+                  job_role = role_arn 
+                  #.rpartition("/")[-1]
+                  
+                  try:
+                      glue_client = boto3.client('glue')
+                      s3_source = "s3://"+ bucket_name +"/data/"
+                      response = glue_client.create_crawler(
+                          Name=crawler_name,
+                          Role=job_role,
+                          DatabaseName=db_name,
+                          Targets={
+                              "S3Targets": [
+                                  {
+                                      "Path": s3_source
+                                  }
+                              ]
+                          },
+                          SchemaChangePolicy={
+                              'UpdateBehavior': 'UPDATE_IN_DATABASE',
+                              'DeleteBehavior': 'DEPRECATE_IN_DATABASE'
+                          },
+                          Description='Crawler for S3',
+                          Configuration='{"Version":1.0,"CrawlerOutput":{"Partitions":{"AddOrUpdateBehavior":"InheritFromTable"},"Tables":{"AddOrUpdateBehavior":"MergeNewColumns"}}}'
+                      )
+                  except Exception as e:
+                      print("Failed provisioning glue crawler "+str(e))
+                  
+                  print("waiting: " + str(60))
+                  time.sleep(60)
+                  #wait_for_crawler_creation(crawler_name)
+                  #print('Crawler', crawler_name, 'is created.')
+                  
+                  response = run_glue_crawler(crawler_name)
+                  print('Crawler', crawler_name, 'is running:', response['ResponseMetadata']['HTTPStatusCode'])
+                  
+                  return ret_dict
+
+              def create_bedrock_kb(role_arn,bucket_name,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr, dict_return):
+
+                  agent_resource_role_arn = role_arn
+                  knowledge_base_resource_role_arn = role_arn
+                  open_api_s3_url = 's3://' + bucket_name + '/code/agent_aws_openapi.json'
+
+                  knowledge_base_bucket = bucket_name
+                  foundation_model = agent_model
+                  instruction = agent_instruction
+                  description = agent_instruction
+                  knowledge_base_name = agent_kb_name
+                  knowledge_base_description = agent_kb_descr
+                  action_group_name = agent_actiongroupname
+                  data_source_name =  agent_kb_name
+
+                  agent_config = {
+                      "agentName": agent_name,
+                      "instruction": instruction,
+                      "foundationModel": foundation_model,
+                      "description": description,
+                      "idleSessionTTLInSeconds": 60,
+                      "agentResourceRoleArn": agent_resource_role_arn
+                  }
+
+                  response = {}
+
+                  if agent_id == "":
+                      response = bedrock_agent_client.create_agent(**agent_config)
+                      agent_id = response['agent']['agentId']
+                  else:
+                      agent_config["agentId"] = agent_id
+                      response = bedrock_agent_client.update_agent(**agent_config)
+                      
+                  agent_versions = bedrock_agent_client.list_agent_versions(agentId = agent_id)
+
+                  agent_version = agent_versions['agentVersionSummaries'][0]['agentVersion']  
+                  print(f"Agent Version: {agent_version}")
+
+
+                  # set up Opensearch Serverless collection for KB
+                  current_session = boto3.session.Session()
+                  region = current_session.region_name
+                  print(f"The current region is {region}")
+
+                  service = 'aoss'
+                  credentials = current_session.get_credentials()
+
+                  awsauth = AWS4Auth(credentials.access_key, credentials.secret_key, region, service,
+                  session_token=credentials.token)
+
+                  # Create an OpenSearch client
+                  client = OpenSearch(
+                      hosts = [{'host': opensearch_hostname, 'port': 443}],
+                      http_auth = awsauth,
+                      timeout = 300,
+                      use_ssl = True,
+                      verify_certs = True,
+                      connection_class = RequestsHttpConnection
+                  )
+                  index_name = "bedrock-kb-demo"
+                  vector_field = "kb_vector"
+                  text_field = "kb_text"
+                  bedrock_metadata_field = "bedrock"
+                  vector_size = 1536
+
+                  index_found = False
+                  try:
+                      client.indices.get(index=index_name)
+                      index_found = True
+                  except:
+                      print("Index does not exist, create the index")
+
+                  #create a new index
+                  if index_found == False:
+                      index_body = {
+                          "settings": {
+                              "index.knn": True
+                        },
+                        'mappings': {
+                          'properties': {
+                            f"{vector_field}": { "type": "knn_vector", "dimension": vector_size, "method": {"engine": "nmslib", "space_type": "cosinesimil", "name": "hnsw", "parameters": {}   } },
+                            f"{text_field}": { "type": "text" },
+                            f"{bedrock_metadata_field}": { "type": "text", "index": False }
+                          }
+                        }
+                      }
+
+                      client.indices.create(
+                        index=index_name, 
+                        body=index_body
+                      )
+                      # wait 30 seconds for index creation to complete
+                      time.sleep(30)
+
+                  client.indices.get(index=index_name)
+
+                  # create / update the knowledge base
+
+                  knowledge_base_config = {
+                      "name": knowledge_base_name,
+                      "description": knowledge_base_description,
+                      "roleArn":knowledge_base_resource_role_arn,
+                      "knowledgeBaseConfiguration": {
+                          "type": 'VECTOR',
+                          "vectorKnowledgeBaseConfiguration": {
+                              "embeddingModelArn": "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v1"
+                          }
+                      },
+                      "storageConfiguration": {
+                          "type": 'OPENSEARCH_SERVERLESS',
+                          "opensearchServerlessConfiguration": {
+                              "collectionArn": opensearch_collection_arn,
+                              "vectorIndexName": index_name,
+                              "fieldMapping": {
+                                  "vectorField": vector_field,
+                                  "textField": text_field,
+                                  "metadataField": bedrock_metadata_field
+                              }
+                          }
+                      }
+                  }
+
+                  if knowledge_base_id == "":
+                      response = bedrock_agent_client.create_knowledge_base(**knowledge_base_config)
+                      knowledge_base_id = response['knowledgeBase']['knowledgeBaseId']
+                  else:
+                      knowledge_base_config["knowledgeBaseId"] = knowledge_base_id
+                      response = bedrock_agent_client.update_knowledge_base(**knowledge_base_config)
+                      
+
+                  data_source_id = ""
+                  max_token_chunk = 150
+                  overlap = 5
+
+                  response = bedrock_agent_client.list_data_sources(
+                      knowledgeBaseId=knowledge_base_id
+                  )
+                  for data_source in response['dataSourceSummaries']:
+                      if data_source['knowledgeBaseId'] == knowledge_base_id:
+                          data_source_id = data_source['dataSourceId']
+
+                  # configure data_source
+                  data_source_config = {
+                      "knowledgeBaseId": knowledge_base_id,
+                      "name": data_source_name,
+                      "description": data_source_name,
+                      "dataSourceConfiguration": {
+                          "type": 'S3',
+                          "s3Configuration": {
+                              "bucketArn": knowledge_base_bucket
+                          }
+                      },
+                      "vectorIngestionConfiguration": {
+                          "chunkingConfiguration": {
+                              "chunkingStrategy": "FIXED_SIZE",
+                              "fixedSizeChunkingConfiguration": {
+                                  "maxTokens": max_token_chunk,
+                                  "overlapPercentage": overlap
+                              }
+                          }
+                      }
+                  }
+
+                  if data_source_id == "":
+                      ds_response = bedrock_agent_client.create_data_source(**data_source_config)
+                      data_source_id = ds_response['dataSource']['dataSourceId']
+                  return ret_dict
+
+              def handle_delete(bucket_name,GlueDatabaseName, pattern,role_arn,region_name, account_id):
+                  dict_return={}
+                  dict_return["Data"]="test_delete"
+                  empty_bucket(bucket_name,region_name,account_id)  
+                  delete_crawler(pattern)
+                  # TO DO: DELETE AOSS collection, Bedrock Agents & KB
+                  drop_database(GlueDatabaseName, pattern)
+
+                  return dict_return  
+
+              def handle_create(bucket_name,GlueDatabaseName, pattern,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr):
+                  print('start handle create')
+                  dict_return={}
+                  dict_return=provision_s3_dirs(bucket_name,region_name, account_id,dict_return)
+                  dict_return=deploy_assets(bucket_name,region_name, account_id,role_arn, dict_return)
+                  dict_return=create_glue_database(bucket_name,GlueDatabaseName,pattern,dict_return)
+                  dict_return=deploy_and_run_glue_crawler(role_arn, pattern, GlueDatabaseName, bucket_name, dict_return)
+                  dict_return=create_bedrock_kb(role_arn, bucket_name,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr, dict_return)
+
+                  return dict_return
+
+              def lambda_handler(event, context):
+                  response_ = cfnresponse.SUCCESS
+                  print(str(event))
+                  return_dict={}
+                  physical_resourceId = ''.join(random.choices(string.ascii_lowercase +string.digits, k=7))
+                  
+                  
+                  try:
+                      account_id = context.invoked_function_arn.split(":")[4]
+                      role_arn = str(os.environ['ROLE_ARN'])
+                      region_name = str(os.environ['AWS_REGION'])
+                      bucket_arg = str(os.environ['BUCKET'])
+                      random_string_arg = str(os.environ['RANDOM_STRING'])
+                      agent_model = str(os.environ['AGENT_MODEL'])
+                      agent_name = str(os.environ['AGENT_NAME'])
+                      agent_instruction = str(os.environ['AGENT_INSTRUCTION'])
+                      agent_actiongroupname = str(os.environ['AGENT_ACTION_GROUP'])
+                      agent_kb_name = str(os.environ['AGENT_KB'])
+                      agent_kb_descr = str(os.environ['AGENT_KB_DESCR'])
+
+                      GlueDatabaseName = agent_name
+
+                      request_type = str(event.get("RequestType",""))
+                      print('picked up event: '+ str(request_type))
+                      if request_type=='Create':
+                          return_dict = handle_create(bucket_arg, GlueDatabaseName, random_string_arg,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr)
+                      elif request_type =='Delete':
+                          return_dict = handle_delete(bucket_arg, GlueDatabaseName, random_string_arg,role_arn,region_name, account_id)
+                      else:
+                          return_dict = {}
+                          return_dict["Data"] = "testupdate"
+                  except Exception as e:
+                    return_dict['Data'] = str(e)
+                    response_ = cfnresponse.FAILED
+                  cfnresponse.send(event,context,response_,return_dict,physical_resourceId)
+        
+        Role: !GetAtt BedrockAgentToolsFunctionRole.Arn
+        Environment:
+            Variables:
+                BUCKET: !Ref DataBucket
+                RANDOM_STRING: !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]
+                ROLE_ARN: !GetAtt BedrockAgentToolsFunctionRole.Arn
+                AGENT_MODEL: !Ref AgentFoundationModel
+                AGENT_NAME: !Ref AgentName
+                AGENT_INSTRUCTION: !Ref AgentInstruction
+                AGENT_ACTION_GROUP: !Ref AgentActionGroupName
+                AGENT_KB: !Ref KnowledgeBaseName
+                AGENT_KB_DESCR: !Ref KnowledgeBaseDescription
+        Runtime: python3.9
+        Timeout: '900'
+        MemorySize: '128'
+        EphemeralStorage: 
+            Size: 512 
+  
+  EnableLambda:
+    DependsOn:
+      - LambdaSetupFunction
+      - BedrockAgentToolsFunctionRole
+    Type: Custom::EnableLambda
+    Version: '1.0'
+    Properties:
+        ServiceToken: !GetAtt LambdaSetupFunction.Arn
+
+
+
+
+Outputs:
+  StackName:
+    Description: This is the stack name.
+    Value: !Ref 'AWS::StackName'
+    Export:
+      Name: !Sub '${AWS::StackName}-StackName'
+  VPCCIDRBlock:
+    Description: This is the VPC CIDR Block.
+    Value: !Join 
+      - ''
+      - - !Ref CIDRPrefix
+        - .0.0/21
+    Export:
+      Name: !Sub '${AWS::StackName}-VPCCIDRBlock'
+  VPCCIDRPrefix:
+    Description: This is the VPC CIDR Prefix For Offsetting in your chained stacks.
+    Value: !Ref CIDRPrefix
+    Export:
+      Name: !Sub '${AWS::StackName}-VPCCIDRPrefix'
+  EnvTag:
+    Description: This is the environment tag to use for other stacks to inherit.
+    Value: !Ref EnvironmentTag
+    Export:
+      Name: !Sub '${AWS::StackName}-EnvTag'
+  PublicSubnet0:
+    Description: Public subnet 0 for Load Balancer
+    Value: !Ref PublicSubnet0
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicSubnet0'
+  PublicSubnet1:
+    Description: Public subnet 1 for Load Balancer
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicSubnet1'
+  PublicSubnet2:
+    Description: Public subnet 2 for Load Balancer
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicSubnet2'
+  PrivateSubnetApp0:
+    Description: Private subnet 0 for Application
+    Value: !Ref PrivateSubnetApp0
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateSubnetApp0'
+  PrivateSubnetApp1:
+    Description: Private subnet 1 for Application
+    Value: !Ref PrivateSubnetApp1
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateSubnetApp1'
+  PrivateSubnetApp2:
+    Description: Private subnet 2 for Application
+    Value: !Ref PrivateSubnetApp2
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateSubnetApp2'
+  ApplicationCIDRRange:
+    Description: This is the Application CIDR Range.
+    Value: !Join 
+      - ''
+      - - !Ref CIDRPrefix
+        - .4.0/22
+    Export:
+      Name: !Sub '${AWS::StackName}-ApplicationCIDRRange'
+  PublicCIDRRange:
+    Description: This is the Application CIDR Range.
+    Value: !Join 
+      - ''
+      - - !Ref CIDRPrefix
+        - .0.0/22
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicCIDRRange'
+  PublicRoutingTable:
+    Description: Public Route Table
+    Value: !Ref PublicRoutingTable
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicRoutingTable'
+  PrivateRoutingTable:
+    Description: Private Route Table
+    Value: !Ref PrivateRoutingTable
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateRoutingTable'
+  NATPublicIP:
+    Description: >-
+      This is the NAT Public IP address for external whitelisting of external
+      repos and packages.
+    Value: !Ref NATGatewayIPAddress
+    Export:
+      Name: !Sub '${AWS::StackName}-NATPublicIP'
+  VPCID:
+    Description: This is the VPC you have created
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${AWS::StackName}-VPCID'
+  OpenSearchArn:
+    Value:
+      'Fn::GetAtt':
+        - OpenSearchServiceDomain
+        - Arn
+  OpenSearchDomainEndpoint:
+    Value:
+      'Fn::GetAtt':
+        - OpenSearchServiceDomain
+        - DomainEndpoint
+  AgentToolsRepositoryUri:
+    Value: !GetAtt AgentToolsRepository.RepositoryURi
+    Export:
+      Name: 'ECRUri'

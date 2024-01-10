@@ -1,16 +1,43 @@
 import tools
-from opentelemetry import metrics
-from opentelemetry import trace
 import logging
 
-logging.basicConfig(format='[%(asctime)s] p%(process)s {%(filename)s:%(lineno)d} %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Creates a tracer from the global tracer provider
-tracer = trace.get_tracer("appl.tracer")
+from opentelemetry import trace
 
 
-@tracer.start_as_current_span("lambda_handler")
+### Explicitly added for logging which is currently in experimental stage and not working with auto-instrumentation
+### OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED = true
+### BEG
+from opentelemetry._logs import get_logger
+from opentelemetry._logs import set_logger_provider
+from opentelemetry.exporter.otlp.proto.http._log_exporter import (
+   OTLPLogExporter,
+)
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk.resources import Resource
+
+logger_provider = LoggerProvider(
+   resource=Resource.create(
+       {
+           "service.name": "FinancialAgent"
+       }
+   ),
+)
+set_logger_provider(logger_provider)
+exporter = OTLPLogExporter()
+logger_provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
+handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
+# Attach OTLP handler to root logger
+logging.getLogger().addHandler(handler)
+logger = logging.getLogger("FinancialAgent")
+### END
+
+
+## Creates a tracer from the global tracer provider
+tracer = trace.get_tracer("FinancialAgent")
+
+
+@tracer.start_as_current_span("FinancialAgent_lambda_handler")
 def handler(event, context):
     # Print the received event to the logs
     logger.info("Received event: ")
@@ -34,15 +61,17 @@ def handler(event, context):
 
     # Check the api path to determine which tool function to call
     if api_path == "/get_investment_research":
-        body = tools.get_investment_research(query)
-        # Create a response body with the result
-        response_body = {"application/json": {"body": str(body)}}
-        response_code = 200
+        with tracer.start_as_current_span("FinancialAgent_lambda_handler_get_investment_research") as child:
+            body = tools.get_investment_research(query)
+            # Create a response body with the result
+            response_body = {"application/json": {"body": str(body)}}
+            response_code = 200
     elif api_path == "/get_existing_portfolio":
-        body = tools.get_existing_portfolio(query)
-        # Create a response body with the result
-        response_body = {"application/json": {"body": str(body)}}
-        response_code = 200
+        with tracer.start_as_current_span("FinancialAgent_lambda_handler_get_existing_portfolio") as child2:
+            body = tools.get_existing_portfolio(query)
+            # Create a response body with the result
+            response_body = {"application/json": {"body": str(body)}}
+            response_code = 200
     else:
         # If the api path is not recognized, return an error message
         body = {"{}::{} is not a valid api, try another one.".format(action, api_path)}
@@ -65,4 +94,5 @@ def handler(event, context):
     api_response = {"messageVersion": "1.0", "response": action_response}
     logger.info(f"API response: {api_response}")
 
+    #logger_provider.shutdown()
     return api_response

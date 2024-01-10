@@ -1,5 +1,4 @@
 import json
-
 import boto3
 from langchain.embeddings import BedrockEmbeddings
 from langchain.vectorstores import FAISS
@@ -21,6 +20,41 @@ warnings.filterwarnings("ignore")
 from langchain.tools import DuckDuckGoSearchRun
 import csv
 from io import StringIO
+
+import logging
+
+from opentelemetry import trace
+
+### Explicitly added for logging which is currently in experimental stage and not working with auto-instrumentation
+### OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED = true
+### BEG
+from opentelemetry._logs import get_logger
+from opentelemetry._logs import set_logger_provider
+from opentelemetry.exporter.otlp.proto.http._log_exporter import (
+   OTLPLogExporter,
+)
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk.resources import Resource
+
+logger_provider = LoggerProvider(
+   resource=Resource.create(
+       {
+           "service.name": "FinancialAgent"
+       }
+   ),
+)
+set_logger_provider(logger_provider)
+exporter = OTLPLogExporter()
+logger_provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
+handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
+# Attach OTLP handler to root logger
+logging.getLogger().addHandler(handler)
+logger = logging.getLogger("FinancialAgent")
+### END
+
+## Creates a tracer from the global tracer provider
+tracer = trace.get_tracer("FinancialAgent")
 
 # initialize clients
 athena = boto3.client('athena')
@@ -114,7 +148,7 @@ def get_stock_ticker(company_name):
     ticker = company_ticker.strip()
     return ticker
 
-
+@tracer.start_as_current_span("FinancialAgent_lambda_tools_get_investment_research_YahooFinanceStockAPI")
 def get_stock_price(ticker, history=10):
     today = date.today()
     start_date = today - timedelta(days=history)
@@ -137,6 +171,7 @@ def google_query(search_term):
     return url
 
 
+@tracer.start_as_current_span("FinancialAgent_lambda_tools_get_investment_research_GoogleStockNews")
 def get_recent_stock_news(company_name):
     headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.0.0 Safari/537.36'}
 
@@ -162,6 +197,7 @@ def get_recent_stock_news(company_name):
 
 
 # Get financial statements from Yahoo Finance
+@tracer.start_as_current_span("FinancialAgent_lambda_tools_get_investment_research_YahooFinanceAPI")
 def get_financial_statements(ticker):
     if "." in ticker:
         ticker=ticker.split(".")[0]
@@ -178,6 +214,7 @@ def get_financial_statements(ticker):
     return balance_sheet
 
 
+@tracer.start_as_current_span("FinancialAgent_lambda_tools_get_investment_research")
 def get_investment_research(query):
     company_name =get_company_name(query)
     ticker=get_stock_ticker(company_name)
@@ -189,6 +226,7 @@ def get_investment_research(query):
     
     return available_public_information
 
+@tracer.start_as_current_span("FinancialAgent_lambda_tools_get_existing_portfolio")
 def get_existing_portfolio(username):
     existing_portfolio = {}
 
@@ -200,6 +238,7 @@ def get_existing_portfolio(username):
     query = 'SELECT * FROM "' + databaseName + '"."' + tableName + '";'
 
     # run the query
+    logger.info('run Athena query ' + str(query))
     athena_response = athena.start_query_execution(
         QueryString=query,
         QueryExecutionContext={
@@ -208,22 +247,23 @@ def get_existing_portfolio(username):
     )
     # Get the query execution ID
     query_execution_id = athena_response['QueryExecutionId']
-
+    logger.info('Athena query execution id ' + str(query_execution_id))
     # Check the status of the query execution
     while True:
         response = athena.get_query_execution(
             QueryExecutionId=query_execution_id
         )
         status = response['QueryExecution']['Status']['State']
-        
+        logger.info('Athena query execution status ' + str(status))
         if status in ['SUCCEEDED', 'FAILED', 'CANCELLED']:
             break
-
+        logger.info('sleep 5')
         time.sleep(5)
 
     # Check if the query was successful
     if status == 'SUCCEEDED':
         # Get the results
+        logger.info('Athena get query results')
         results_response = athena.get_query_results(
             QueryExecutionId=query_execution_id
         )
@@ -241,9 +281,9 @@ def get_existing_portfolio(username):
 
         # Get the CSV string
         existing_portfolio =  "{" + csv_output.getvalue() + "}"
-
+        logger.info(str(existing_portfolio))
     else:
-        print('Query execution failed: {}'.format(status))
+        logger.error('Query execution failed: {}'.format(status))
             
     # table with holding name & percentage
 

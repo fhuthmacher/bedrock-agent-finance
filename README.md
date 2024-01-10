@@ -13,4 +13,4 @@ Some familiarly with Python and using services such as Lambda and Elastic Contai
 This tutorial assumes you are working in an environment with access to [Python 3.9](https://www.python.org/getit/) or later and [Docker](https://www.docker.com/). 
 
 ## Deployment instructions
-This repo is part of a blog which outlines the deployment and can be found here: https://github.com/fhuthmacher/bedrock-agent-finance
+This repo is part of a blog which outlines the deployment and can be found here.

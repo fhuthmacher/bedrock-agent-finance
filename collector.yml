@@ -9,14 +9,11 @@ extensions:
 receivers:
   otlp:
     protocols:
-
       http:
         endpoint:
 
-exporters:
-  logging:
-    loglevel: debug
 
+exporters:
   otlphttp:
     auth:
       authenticator: sigv4auth
