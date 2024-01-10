@@ -450,12 +450,14 @@ Resources:
                 - es.amazonaws.com
                 - osis.amazonaws.com
                 - ec2.amazonaws.com
+                - glue.amazonaws.com
             Action:
               - sts:AssumeRole
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
         - 'arn:aws:iam::aws:policy/AWSLambda_FullAccess'
         - 'arn:aws:iam::aws:policy/SecretsManagerReadWrite'
+        - 'arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole'
       Policies:
         - PolicyName: ECRGetAuthorizationToken
           PolicyDocument:
@@ -471,10 +473,14 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
-                  - bedrock:InvokeAgent
+                  - bedrock:*
                   - glue:GetTables
                   - glue:GetTable
                   - glue:CreateDatabase
+                  - glue:DeleteDatabase
+                  - glue:DeleteCrawler
+                  - glue:CreateCrawler
+                  - glue:StartCrawler
                   - athena:GetWorkGroup
                   - athena:StartQueryExecution
                   - athena:CancelQueryExecution
@@ -520,9 +526,42 @@ Resources:
               Action:
               - 's3:Get*'
               - 's3:List*'
+              - 's3:AbortMultipartUpload'
+              - 's3:DeleteObject'
+              - 's3:GetBucketVersioning'
+              - 's3:GetObject'
+              - 's3:GetObjectTagging'
+              - 's3:GetObjectVersion'
+              - 's3:ListBucket'
+              - 's3:ListBucketMultipartUploads'
+              - 's3:ListBucketVersions'
+              - 's3:ListMultipartUploadParts'
+              - 's3:PutBucketVersioning'
+              - 's3:PutObject'
+              - 's3:PutObjectTagging'
               Resource:
               - !Sub '${DataBucket.Arn}/*'
-              - !Sub '${DataBucket.Arn}'    
+              - !Sub '${DataBucket.Arn}'
+
+  IAMPassAccessPolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyDocument: !Sub |
+          {
+              "Version": "2012-10-17",
+              "Statement": [
+                  {
+                      "Effect": "Allow",
+                      "Action": "iam:PassRole",
+                      "Resource": "arn:aws:iam::${AWS::AccountId}:role/${BedrockAgentToolsFunctionRole}"
+                  }
+              ]
+          }
+            
+      Roles: 
+        - !Ref   BedrockAgentToolsFunctionRole
+      PolicyName: !Join ['_', ['glue_iam_pass_policy', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+
 
   TestCollection:
     Type: 'AWS::OpenSearchServerless::Collection'
@@ -583,6 +622,37 @@ Resources:
               import shutil
               import time
 
+              import subprocess
+
+              def run_shell(cmd):
+                  process = subprocess.Popen(
+                      cmd.split(' '),
+                      encoding='utf-8',
+                      stdin=subprocess.PIPE,
+                      stdout=subprocess.PIPE,
+                  )
+
+                  while(True):
+                      returncode = process.poll()
+                      if returncode is None:
+                          # You describe what is going on.
+                          # You can describe the process every time the time elapses as needed.
+                          # print("running process")
+                          time.sleep(0.01)
+                          data = process.stdout
+                          if data:
+                              # If there is any response, describe it here.
+                              # You need to use readline () or readlines () properly, depending on how the process responds.
+                              msg_line = data.readline()
+                              print(msg_line, end="")
+                          err = process.stderr
+                          if err:
+                              # If there is any error response, describe it here.
+                              msg_line = err.readline()
+                              print(msg_line, end="")
+                      else:
+                          break
+
 
               def wait_for_crawler_creation(crawler_name):
                   glue_client = boto3.client('glue')
@@ -625,21 +695,177 @@ Resources:
               def drop_database(GlueDatabaseName, pattern):
                   try:
                     glue = boto3.client('glue')
-                    db_name = GlueDatabaseName+pattern
+                    #db_name = GlueDatabaseName+pattern
+                    db_name = 'investment_portfolio'
                     glue.delete_database(Name=db_name) 
                   except Exception as e:
                     print(str(e))
                   return "DB {} Deleted ".format(db_name)  
 
               def delete_crawler(pattern):
-                  crawler_name= "glue-etl-redshift-"+pattern
+                  crawler_name = "stockportfolio-"+pattern
                   try:
                     glue = boto3.client('glue')
                     glue.delete_crawler(Name=crawler_name)
                   except Exception as e:
                     print(str(e))
                   return "Crawler {} deleted ".format(crawler_name) 
-                    
+
+              def delete_bedrock_kb(role_arn,bucket_name,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr, dict_return):
+
+                  agent_resource_role_arn = role_arn
+                  knowledge_base_resource_role_arn = role_arn
+                  open_api_s3_url = 's3://' + bucket_name + '/code/agent_aws_openapi.json'
+
+                  knowledge_base_bucket = bucket_name
+                  foundation_model = agent_model
+                  instruction = agent_instruction
+                  description = agent_instruction
+                  knowledge_base_name = agent_kb_name
+                  knowledge_base_description = agent_kb_descr
+                  action_group_name = agent_actiongroupname
+                  data_source_name =  agent_kb_name
+
+                  bedrock_agent_client = boto3.client('bedrock-agent')
+                  paginator = bedrock_agent_client.get_paginator('list_agents')
+
+                  response_iterator = paginator.paginate()
+                  agent_id = ""
+                  agent_version = ""
+                  data_source_id = ""
+                  action_group_id = ""
+
+                  for page in response_iterator:
+                      for agent in page['agentSummaries']:
+                          if agent['agentName'] == agent_name:
+                              agent_id = agent['agentId']
+                              
+                  if agent_id != "":
+                      agent_versions = bedrock_agent_client.list_agent_versions(agentId = agent_id)
+                      agent_version = agent_versions['agentVersionSummaries'][0]['agentVersion']  
+
+                  if agent_id != "" and agent_version != "":
+                      agent_list_response = bedrock_agent_client.list_agent_action_groups(
+                          agentId=agent_id,
+                          agentVersion=agent_version,
+                      )
+                      
+                      for agent in agent_list_response['actionGroupSummaries']:
+                          if agent['actionGroupName'] == action_group_name:
+                              action_group_id = agent['actionGroupId']
+                          
+                  paginator = bedrock_agent_client.get_paginator('list_knowledge_bases')
+
+                  response_iterator = paginator.paginate()
+
+                  for page in response_iterator:
+                      for kb in page['knowledgeBaseSummaries']:
+                          if kb['name'] == knowledge_base_name:
+                              knowledge_base_id = kb['knowledgeBaseId']
+
+                  if knowledge_base_id != "":
+                      data_source_list_response = bedrock_agent_client.list_data_sources(
+                          knowledgeBaseId=knowledge_base_id
+                      )
+
+                      for data_source in data_source_list_response['dataSourceSummaries']:
+                          if data_source['name'] == data_source_name:
+                              data_source_id = data_source['dataSourceId']
+
+
+
+                  print(f"Agent Id: {agent_id}")
+                  print(f"Agent Version: {agent_version}")
+                  print(f"Action Group Id: {action_group_id}")
+                  print(f"Knowledgebase Id: {knowledge_base_id}")
+                  print(f"Datasource Id: {data_source_id}")
+
+                  bucket= open_api_s3_url[5:open_api_s3_url[5:].find('/')+5]
+                  key = open_api_s3_url[open_api_s3_url[5:].find('/')+6:]
+
+                  action_group_config = {
+                      "agentId": agent_id,
+                      "agentVersion": agent_version,
+                      "actionGroupId": action_group_id,
+                      "actionGroupName": action_group_name,
+                      "description": "This action group provides access to AWS account financial data",
+                      "actionGroupExecutor" : {
+                          "lambda": lambda_arn
+                      },
+                      "apiSchema": {
+                          "s3": {
+                              "s3BucketName": bucket,
+                              "s3ObjectKey": key
+                          }
+                      },
+                      "actionGroupState": "DISABLED"
+                  }
+
+                  try:
+                      action_group_result = bedrock_agent_client.update_agent_action_group(**action_group_config)
+                      action_group_result = bedrock_agent_client.delete_agent_action_group(
+                          agentId=agent_id,
+                          agentVersion=agent_version,
+                          actionGroupId=action_group_id
+                      )
+                      print("Action Group Deleted")
+                  except:
+                      print("Unable to Delete Action Group.")
+
+
+                  #response = bedrock_agent_client.disassociate_agent_knowledge_base(
+                  #    agentId=agent_id,
+                  #    agentVersion=agent_version,
+                  #    knowledgeBaseId=knowledge_base_id
+                  #)
+
+                  try:
+                      response = bedrock_agent_client.delete_data_source(
+                          knowledgeBaseId=knowledge_base_id,
+                          dataSourceId=data_source_id
+                      )
+                      print("Data Source Deleted")
+                  except:
+                      print("Unable to Delete Data Source.")
+
+                  try:
+                      response = bedrock_agent_client.delete_knowledge_base(
+                          knowledgeBaseId=knowledge_base_id
+                      )
+                      print("Knowledge Base Deleted")
+                  except:
+                      print("Unable to Delete Knowledge Base.")
+
+                  try:
+                      response = bedrock_agent_client.delete_agent(
+                          agentId=agent_id
+                      )
+                      print("Agent Deleted")
+                  except:
+                      print("Unable to Delete Agent.")
+                      
+                  run_shell(f"aws s3 rm --recursive s3://{knowledge_base_bucket.split(':')[5]}")
+                  run_shell(f"aws s3 rm --recursive s3://{bucket}")
+                  run_shell(f"aws cloudformation delete-stack --stack-name {stack_name}")
+
+                  try:
+                      stack = cfn_client.describe_stacks(StackName=stack_name)
+                      status = stack['Stacks'][0]['StackStatus']
+                  except:
+                      status = "COMPLETE"
+                      
+                  while status == 'DELETE_IN_PROGRESS':
+                      print(f"deleting stack {stack_name}...")
+                      time.sleep(5)
+                      try:
+                          stack = cfn_client.describe_stacks(StackName=stack_name)
+                          status = stack['Stacks'][0]['StackStatus']
+                      except:
+                          status = "COMPLETE"
+
+
+                  return "bedrock agent and kb {} deleted ".format(agent_name)
+
               def configure_athena_result_location(bucket_name):
                   print('start athena result location configuration')
                   client = boto3.client('athena')
@@ -702,7 +928,7 @@ Resources:
                       download_public_files("https://d3q8adh3y5sxpk.cloudfront.net/tutorial/amazon_10k_2023.pdf","amazon_10k_2023.pdf")
                       download_public_files("https://d3q8adh3y5sxpk.cloudfront.net/tutorial/agent_aws_openapi.json","agent_aws_openapi.json")
                       s3_client = boto3.client('s3')
-                      s3_client.upload_file('/tmp/stock_portfolio.csv', bucket_name, 'data/stock_portfolio.csv')
+                      s3_client.upload_file('/tmp/stock_portfolio.csv', bucket_name, 'data/stock_portfolio/stock_portfolio.csv')
                       s3_client.upload_file('/tmp/amazon_10k_2023.pdf', bucket_name, 'kb/amazon_10k_2023.pdf')
                       s3_client.upload_file('/tmp/agent_aws_openapi.json', bucket_name, 'code/agent_aws_openapi.json')
 
@@ -715,7 +941,8 @@ Resources:
                   print("create Glue database: "+GlueDatabaseName)
                   try :
                       glue = boto3.client('glue')
-                      db_name = GlueDatabaseName+pattern
+                      #db_name = GlueDatabaseName+pattern
+                      db_name = 'investment_portfolio'
                       db_location = "s3://"+ bucket_name +"/database_path/glue-etl-redshift/"
                       glue.create_database(DatabaseInput={'Name': db_name,'LocationUri': db_location})
                   except Exception as e:
@@ -772,6 +999,11 @@ Resources:
                   agent_resource_role_arn = role_arn
                   knowledge_base_resource_role_arn = role_arn
                   open_api_s3_url = 's3://' + bucket_name + '/code/agent_aws_openapi.json'
+
+                  agent_id = ""
+                  agent_version = ""
+                  data_source_id = ""
+                  action_group_id = ""
 
                   knowledge_base_bucket = bucket_name
                   foundation_model = agent_model
