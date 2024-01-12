@@ -322,6 +322,7 @@ Resources:
           ToPort: 443
           CidrIp: 0.0.0.0/0
 
+
   DataBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -403,6 +404,294 @@ Resources:
         - Key: Name
           Value: ECR-Loader
 
+  OpenSearchIngestionTrace:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['', ['/aws/vendedlogs/', !Join ['', ['trace-pipeline', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]]]
+      RetentionInDays: 1
+
+  OpenSearchIngestionTracePipeline:
+    Type: 'AWS::OSIS::Pipeline'
+    DependsOn:
+      - BedrockAgentToolsFunctionRole
+      - PrivateSubnetApp1
+      - opsSecurityGroup
+    Properties:
+      LogPublishingOptions:
+        IsLoggingEnabled: true
+        CloudWatchLogDestination:
+          LogGroup: !Join ['', ['/aws/vendedlogs/', !Join ['', ['trace-pipeline', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]]]
+      MinUnits: 3
+      MaxUnits: 9
+      PipelineName: !Join ['', ['trace-pipeline', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      VpcOptions:
+        SubnetIds:
+          - !Ref PrivateSubnetApp1
+        SecurityGroupIds:
+          - !Ref opsSecurityGroup
+      PipelineConfigurationBody:
+        !Sub |
+        ###
+          # Limitations: https://docs.aws.amazon.com/opensearch-service/latest/ingestion/ingestion.html#ingestion-limitations
+          ## Relevant Documentation for this blueprint
+            # https://docs.aws.amazon.com/opensearch-service/latest/developerguide/use-cases-trace-analytics.html
+            # https://docs.aws.amazon.com/opensearch-service/latest/developerguide/pipeline-domain-access.html
+            # https://docs.aws.amazon.com/opensearch-service/latest/developerguide/configure-client.html#configure-client-otel
+          ##
+        ###
+        ###
+          ## entry-pipeline:
+            # This pipeline receives trace data from OpenTelemetry collector, and forwards the trace data
+            # to both the 'span-pipeline' and the 'service-map-pipeline'
+          ##
+          ## span-pipeline:
+            # This pipeline receives the trace data from the 'entry-pipeline`, and then extracts all of the raw spans
+            # from the traces. The raw spans are then sent to OpenSearch to an index that is prefixed with 'otel-v1-apm-span'.
+          ##
+          ## service-map-pipeline:
+            # This pipeline receives the trace data from the `entry-pipeline', and then aggregates and analyzes the trace data to create documents
+            # that represent connections between services. These service map documents are then sent to OpenSearch to an index named 'otel-v1-apm-service-map',
+            # which allows one to see a visualization of the service map through the Trace Analytics plugin in OpenSearch Dashboards.
+          ##
+        ###
+
+        version: "2"
+        entry-pipeline:
+          source:
+            otel_trace_source:
+              path: "/v1/traces"
+          processor:
+            - trace_peer_forwarder:
+          sink:
+            - pipeline:
+                name: "span-pipeline"
+            - pipeline:
+                name: "service-map-pipeline"
+        span-pipeline:
+          source:
+            pipeline:
+              name: "entry-pipeline"
+          processor:
+            - otel_traces:
+              # For reference please visit: https://opensearch.org/docs/latest/data-prepper/pipelines/configuration/processors/otel-trace-raw/
+          sink:
+            - opensearch:
+                # Provide an AWS OpenSearch Service domain endpoint
+                hosts: [ "https://${OpenSearchServiceDomain.DomainEndpoint}" ]
+                aws:
+                  # Provide a Role ARN with access to the domain. This role should have a trust relationship with osis-pipelines.amazonaws.com
+                  sts_role_arn: "${BedrockAgentToolsFunctionRole.Arn}"
+                  # Provide the region of the domain.
+                  region: "${AWS::Region}"
+                  # Enable the 'serverless' flag if the sink is an Amazon OpenSearch Serverless collection
+                  # serverless: true
+                  # serverless_options:
+                    # Specify a name here to create or update network policy for the serverless collection
+                    # network_policy_name: "network-policy-name"
+                index_type: "trace-analytics-raw"
+                # Enable the S3 DLQ to capture any failed requests in an S3 bucket
+                # dlq:
+                  # s3:
+                    # Provide an S3 bucket
+                    # bucket: "your-dlq-bucket-name"
+                    # Provide a key path prefix for the failed requests
+                    # key_path_prefix: "span-pipeline/trace-analytics/dlq/"
+                    # Provide the region of the bucket.
+                    # region: "${AWS::Region}"
+                    # Provide a Role ARN with access to the bucket. This role should have a trust relationship with osis-pipelines.amazonaws.com
+                    # sts_role_arn: "${BedrockAgentToolsFunctionRole.Arn}"
+        service-map-pipeline:
+          source:
+            pipeline:
+              name: "entry-pipeline"
+          processor:
+            - service_map:
+              # For reference please visit: https://opensearch.org/docs/latest/data-prepper/pipelines/configuration/processors/service-map-stateful/
+          sink:
+            - opensearch:
+                # Provide an AWS OpenSearch Service domain endpoint
+                hosts: [ "https://${OpenSearchServiceDomain.DomainEndpoint}" ]
+                aws:
+                  # Provide a Role ARN with access to the domain. This role should have a trust relationship with osis-pipelines.amazonaws.com
+                  sts_role_arn: "${BedrockAgentToolsFunctionRole.Arn}"
+                  # Provide the region of the domain.
+                  region: "${AWS::Region}"
+                  # Enable the 'serverless' flag if the sink is an Amazon OpenSearch Serverless collection
+                  # serverless: true
+                  # serverless_options:
+                    # Specify a name here to create or update network policy for the serverless collection
+                    # network_policy_name: "network-policy-name"
+                index_type: "trace-analytics-service-map"
+                # Enable the S3 DLQ to capture any failed requests in an S3 bucket
+                # dlq:
+                  # s3:
+                    # Provide an S3 bucket
+                    # bucket: "your-dlq-bucket-name"
+                    # Provide a key path prefix for the failed requests
+                    # key_path_prefix: "service-map-pipeline/trace-analytics-service-map/dlq"
+                    # Provide the region of the bucket.
+                    # region: "${AWS::Region}"
+                    # Provide a Role ARN with access to the bucket. This role should have a trust relationship with osis-pipelines.amazonaws.com
+                    # sts_role_arn: "${BedrockAgentToolsFunctionRole.Arn}"
+
+
+  OpenSearchIngestionMetric:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['', ['/aws/vendedlogs/', !Join ['', ['metric-pipeline', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]]]
+      RetentionInDays: 1
+
+  OpenSearchIngestionMetricPipeline:
+    Type: 'AWS::OSIS::Pipeline'
+    DependsOn:
+      - BedrockAgentToolsFunctionRole
+      - PrivateSubnetApp1
+      - opsSecurityGroup
+    Properties:
+      LogPublishingOptions:
+        IsLoggingEnabled: true
+        CloudWatchLogDestination:
+          LogGroup: !Join ['', ['/aws/vendedlogs/', !Join ['', ['metric-pipeline', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]]]
+      MinUnits: 3
+      MaxUnits: 9
+      PipelineName: !Join ['', ['metric-pipeline', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      VpcOptions:
+        SubnetIds:
+          - !Ref PrivateSubnetApp1
+        SecurityGroupIds:
+          - !Ref opsSecurityGroup
+      PipelineConfigurationBody:
+        !Sub |
+          ###
+            # Limitations: https://docs.aws.amazon.com/opensearch-service/latest/ingestion/ingestion.html#ingestion-limitations
+            ## Relevant Documentation for this blueprint
+              # https://docs.aws.amazon.com/opensearch-service/latest/developerguide/use-cases-overview.html
+              # https://docs.aws.amazon.com/opensearch-service/latest/developerguide/configure-client.html#configure-client-otel
+              # https://docs.aws.amazon.com/opensearch-service/latest/developerguide/pipeline-domain-access.html
+            ##
+          ###
+          ###
+            # otel-metrics-pipeline:
+              # This pipeline receives metrics from OpenTelemetry Collector, converts the ExportMetricsServiceRequest to String values, and writes
+              # the result to OpenSearch to an index named 'metrics'
+          ###
+
+          version: "2"
+          otel-metrics-pipeline:
+            source:
+              otel_metrics_source:
+                path: "/v1/metrics"
+            processor:
+              # For more configuration parameters, see https://opensearch.org/docs/latest/data-prepper/pipelines/configuration/processors/otel-metrics/
+              - otel_metrics:
+            sink:
+              - opensearch:
+                  # Provide an AWS OpenSearch Service domain endpoint
+                  hosts: [ "https://${OpenSearchServiceDomain.DomainEndpoint}" ]
+                  aws:
+                    # Provide a Role ARN with access to the domain. This role should have a trust relationship with osis-pipelines.amazonaws.com
+                    sts_role_arn: "${BedrockAgentToolsFunctionRole.Arn}"
+                    # Provide the region of the domain.
+                    region: "${AWS::Region}"
+                    # Enable the 'serverless' flag if the sink is an Amazon OpenSearch Serverless collection
+                    # serverless: true
+                    # serverless_options:
+                      # Specify a name here to create or update network policy for the serverless collection
+                      # network_policy_name: "network-policy-name"
+                  index: "metrics"
+                  # Enable the 'distribution_version' setting if the AWS OpenSearch Service domain is of version Elasticsearch 6.x
+                  # distribution_version: "es6"
+                  # Enable and switch the 'enable_request_compression' flag if the default compression setting is changed in the domain. See https://docs.aws.amazon.com/opensearch-service/latest/developerguide/gzip.html
+                  # enable_request_compression: true/false
+                  # Enable the S3 DLQ to capture any failed requests in an S3 bucket
+                  # dlq:
+                    # s3:
+                      # Provide an S3 bucket
+                      # bucket: "your-dlq-bucket-name"
+                      # Provide a key path prefix for the failed requests
+                      # key_path_prefix: "apache-log-pipeline/logs/dlq"
+                      # Provide the region of the bucket.
+                      # region: "${AWS::Region}"
+                      # Provide a Role ARN with access to the bucket. This role should have a trust relationship with osis-pipelines.amazonaws.com
+                      # sts_role_arn: "${BedrockAgentToolsFunctionRole.Arn}"
+
+  OpenSearchIngestionLog:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['', ['/aws/vendedlogs/', !Join ['', ['log-pipeline', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]]]
+      RetentionInDays: 1
+
+  OpenSearchIngestionLogPipeline:
+    Type: 'AWS::OSIS::Pipeline'
+    DependsOn:
+      - BedrockAgentToolsFunctionRole
+      - PrivateSubnetApp1
+      - opsSecurityGroup
+    Properties:
+      LogPublishingOptions:
+        IsLoggingEnabled: true
+        CloudWatchLogDestination:
+          LogGroup: !Join ['', ['/aws/vendedlogs/', !Join ['', ['log-pipeline', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]]]
+      MinUnits: 3
+      MaxUnits: 9
+      PipelineName: !Join ['', ['log-pipeline', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      VpcOptions:
+        SubnetIds:
+          - !Ref PrivateSubnetApp1
+        SecurityGroupIds:
+          - !Ref opsSecurityGroup
+      PipelineConfigurationBody:
+        !Sub |    
+            ###
+              # Limitations: https://docs.aws.amazon.com/opensearch-service/latest/ingestion/ingestion.html#ingestion-limitations
+              ## Relevant Documentation for this blueprint
+                # https://docs.aws.amazon.com/opensearch-service/latest/developerguide/use-cases-overview.html
+                # https://docs.aws.amazon.com/opensearch-service/latest/developerguide/configure-client.html#configure-client-otel
+                # https://docs.aws.amazon.com/opensearch-service/latest/developerguide/pipeline-domain-access.html
+              ##
+            ###
+            ###
+              # otel-logs-pipeline:
+              # This pipeline receives metrics from OpenTelemetry Collector and writes
+              # the result to OpenSearch to an index named 'logs'
+            ###
+
+            version: "2"
+            otel-logs-pipeline:
+              source:
+                otel_logs_source:
+                  path: "/v1/logs"
+              sink:
+                - opensearch:
+                    # Provide an AWS OpenSearch Service domain endpoint
+                    hosts: [ "https://${OpenSearchServiceDomain.DomainEndpoint}" ]
+                    aws:
+                      # Provide a Role ARN with access to the domain. This role should have a trust relationship with osis-pipelines.amazonaws.com
+                      sts_role_arn: "${BedrockAgentToolsFunctionRole.Arn}"
+                      # Provide the region of the domain.
+                      region: "${AWS::Region}"
+                      # Enable the 'serverless' flag if the sink is an Amazon OpenSearch Serverless collection
+                      # serverless: true
+                      # serverless_options:
+                        # Specify a name here to create or update network policy for the serverless collection
+                        # network_policy_name: "network-policy-name"
+                    index: "logs"
+                    # Enable the 'distribution_version' setting if the AWS OpenSearch Service domain is of version Elasticsearch 6.x
+                    # distribution_version: "es6"
+                    # Enable and switch the 'enable_request_compression' flag if the default compression setting is changed in the domain. See https://docs.aws.amazon.com/opensearch-service/latest/developerguide/gzip.html
+                    # enable_request_compression: true/false
+                    # Enable the S3 DLQ to capture any failed requests in an S3 bucket
+                    # dlq:
+                      # s3:
+                        # Provide an S3 bucket
+                        # bucket: "your-dlq-bucket-name"
+                        # Provide a key path prefix for the failed requests
+                        # key_path_prefix: "apache-log-pipeline/logs/dlq"
+                        # Provide the region of the bucket.
+                        # region: "${AWS::Region}"
+                        # Provide a Role ARN with access to the bucket. This role should have a trust relationship with osis-pipelines.amazonaws.com
+                        # sts_role_arn: "${BedrockAgentToolsFunctionRole.Arn}"  
+                        
 # lambda function for Bedrock Agent
   BedrockAgentToolsLambdaFunction:
     Type: AWS::Lambda::Function
@@ -426,10 +715,14 @@ Resources:
           AWS_LAMBDA_EXEC_WRAPPER: '/opt/otel-instrument'
           OPENTELEMETRY_COLLECTOR_CONFIG_FILE: '/var/task/collector.yaml'
           OTEL_SERVICE_NAME: 'FinancialAgent'
+          LOGS_ENDPOINT: !Select [0, !GetAtt OpenSearchIngestionLogPipeline.IngestEndpointUrls]
+          METRICS_ENDPOINT: !Select [0, !GetAtt OpenSearchIngestionMetricPipeline.IngestEndpointUrls]
+          TRACE_ENDPOINT: !Select [0, !GetAtt OpenSearchIngestionTracePipeline.IngestEndpointUrls]
       Timeout: 900
       EphemeralStorage: 
         Size: 1028
       MemorySize: '1028'
+
 
   LambdaPermission:
     Type: AWS::Lambda::Permission
@@ -456,7 +749,6 @@ Resources:
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
         - 'arn:aws:iam::aws:policy/SecretsManagerReadWrite'
-
       Policies:
         - PolicyName: CloudWatchAccess
           PolicyDocument:
@@ -502,6 +794,8 @@ Resources:
               Resource:
               - !Sub '${DataBucket.Arn}/*'
               - !Sub '${DataBucket.Arn}'
+  
+
   KBPassAccessPolicy:
     Type: "AWS::IAM::Policy"
     Properties:
@@ -521,7 +815,6 @@ Resources:
       PolicyName: !Join ['_', ['kb_iam_pass_policy', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
 
 
-
   BedrockAgentToolsFunctionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -538,6 +831,7 @@ Resources:
                 - opensearchservice.amazonaws.com
                 - es.amazonaws.com
                 - osis.amazonaws.com
+                - osis-pipelines.amazonaws.com
                 - ec2.amazonaws.com
                 - glue.amazonaws.com
             Action:
@@ -587,6 +881,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - osis:Ingest
+                  - 'es:describeDomain'
                 Resource: "*"
         - PolicyName: CloudWatchAccess
           PolicyDocument:
@@ -631,6 +926,7 @@ Resources:
               Resource:
               - !Sub '${DataBucket.Arn}/*'
               - !Sub '${DataBucket.Arn}'
+
 
   IAMPassAccessPolicy:
     Type: "AWS::IAM::Policy"

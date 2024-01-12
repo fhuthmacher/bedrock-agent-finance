@@ -22,11 +22,12 @@ Alternatively follow  the high-level steps in the blog post.
 The CloudFormation stack will create following resources in your account:
 - Amazon Simple Storage Service (Amazon S3) bucket
 - Glue database, crawler, and table for sample dataset
-- 3 AWS Lambda functions
+- 3 AWS Lambda functions & layers
 - 3 IAM roles
 - Elastic Container RegistryBedrock Knowledge Base & Bedrock Agent
 - OpenSearch Serverless Collection as backend for Bedrock KB
 - Provisioned OpenSearch cluster for observability
+- OpenSearch Ingestion pipeline for observability
 - temporary EC2 instance to pull and push Docker image to ECR
 
 To avoid incurring additional charges to your account, stop and delete all of the resources by deleting the CloudFormation template at the end of this tutorial.
