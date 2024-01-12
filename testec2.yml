@@ -1,0 +1,542 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Amazon Bedrock Agents with Observability Tutorial
+Parameters:
+  EnvironmentTag:
+    Description: Enter Environment Tag
+    Type: String
+    Default: 'dev'
+  CIDRPrefix:
+    Description: 'Enter Class B CIDR Prefix (e.g. 192.168, 10.1, 172.16)'
+    Type: String
+    AllowedPattern: '(192\.168)|10\.[0-9][0-9]{0,1}|(172\.([1][6-9]|[2][0-9]|[3][0-1]))'
+    ConstraintDescription: >-
+      must be a valid Private Subnet CIDR Prefix between 192.168 or 10.{0-99} or
+      172.16
+    Default: '192.168'
+  DomainName:
+    Description: User-defined OpenSearch domain name
+    Type: String
+    Default: 'aos'
+  ECRRepoName:
+    Description: ECR repo name
+    Type: String
+    Default: 'financetoolstst'
+  InstanceType:
+    Description: OpenSearchService EC2 instance type
+    Type: String
+    Default: 'r6g.large.search'
+  EEKeyPair:
+    Description: Amazon EC2 Key Pair
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    Default: 'felixh'
+    MinLength: 1
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    AllowedValues:
+      - /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    Description: Image ID for the EC2 helper instance. DO NOT change this.
+  AgentFoundationModel:
+    Description: Amazon Bedrock Agent Foundation Model
+    Type: String
+    Default: 'anthropic.claude-instant-v1'
+  AgentName:
+    Description: Amazon Bedrock Agent Name
+    Type: String
+    Default: 'financetstagent'
+  AgentInstruction:
+    Description: Amazon Bedrock Agent Instruction
+    Type: String
+    Default: 'Agent Finance is an automated, AI-powered agent that helps customers with financial investments.'
+  AgentActionGroupName:
+    Description: Amazon Bedrock Agent ActionGroupName
+    Type: String
+    Default: 'financetstgrp'
+  KnowledgeBaseName:
+    Description: Amazon Bedrock KnowledgeBase Name
+    Type: String
+    Default: 'financetstkb'
+  KnowledgeBaseDescription:
+    Description: Amazon Bedrock KnowledgeBase Description
+    Type: String
+    Default: 'This knowledge base contains financial information.'    
+Resources:
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: !Join 
+        - ''
+        - - !Ref CIDRPrefix
+          - .0.0/21
+      EnableDnsHostnames: 'true'
+      EnableDnsSupport: 'true'
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-vpc'
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-igw'
+  AttachInternetGateway:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  PublicSubnet0:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select 
+        - '0'
+        - !GetAZs ''
+      CidrBlock: !Join 
+        - ''
+        - - !Ref CIDRPrefix
+          - .0.0/24
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-sn-pub0'
+  PublicSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select 
+        - '1'
+        - !GetAZs ''
+      CidrBlock: !Join 
+        - ''
+        - - !Ref CIDRPrefix
+          - .1.0/24
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-sn-pub1'
+  PublicSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select 
+        - '2'
+        - !GetAZs ''
+      CidrBlock: !Join 
+        - ''
+        - - !Ref CIDRPrefix
+          - .2.0/24
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-sn-pub2'
+  PrivateSubnetApp0:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select 
+        - '0'
+        - !GetAZs ''
+      CidrBlock: !Join 
+        - ''
+        - - !Ref CIDRPrefix
+          - .4.0/24
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-sn-priv-app0'
+  PrivateSubnetApp1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select 
+        - '1'
+        - !GetAZs ''
+      CidrBlock: !Join 
+        - ''
+        - - !Ref CIDRPrefix
+          - .5.0/24
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-sn-priv-app1'
+  PrivateSubnetApp2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Select 
+        - '2'
+        - !GetAZs ''
+      CidrBlock: !Join 
+        - ''
+        - - !Ref CIDRPrefix
+          - .6.0/24
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-sn-priv-app2'
+  PublicRoutingTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-rtbl-pub'
+  PublicRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicRoutingTable
+  PublicRouteAssociation0:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PublicRoutingTable
+      SubnetId: !Ref PublicSubnet0
+  PublicRouteAssociation1:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PublicRoutingTable
+      SubnetId: !Ref PublicSubnet1
+  PublicRouteAssociation2:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PublicRoutingTable
+      SubnetId: !Ref PublicSubnet2
+  PrivateRoutingTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - ''
+            - - !Ref EnvironmentTag
+              - '-rtbl-priv'
+  NATGatewayIPAddress:
+    Type: 'AWS::EC2::EIP'
+    DependsOn: AttachInternetGateway
+    Properties:
+      Domain: vpc
+  NATGateway:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt 
+        - NATGatewayIPAddress
+        - AllocationId
+      SubnetId: !Ref PublicSubnet0
+  PrivateRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+      RouteTableId: !Ref PrivateRoutingTable
+  PrivateRouteAssociationApp0:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PrivateRoutingTable
+      SubnetId: !Ref PrivateSubnetApp0
+  PrivateRouteAssociationApp1:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PrivateRoutingTable
+      SubnetId: !Ref PrivateSubnetApp1
+  PrivateRouteAssociationApp2:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PrivateRoutingTable
+      SubnetId: !Ref PrivateSubnetApp2
+
+
+  OpenSearchServiceDomain:
+    Type: 'AWS::OpenSearchService::Domain'
+    Properties:
+      DomainName: !Join ['', [!Ref DomainName, !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      EngineVersion: OpenSearch_2.11
+      ClusterConfig:
+        InstanceCount: 1
+        InstanceType: !Ref InstanceType
+      EBSOptions:
+        EBSEnabled: 'true'
+        Iops: '3000'
+        VolumeSize: 100
+        VolumeType: 'gp3'
+      AdvancedOptions:
+        rest.action.multi.allow_explicit_index: 'true'
+        override_main_response_version: 'true'      
+      AccessPolicies:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: "*"
+            Action:
+              - 'es:*'
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:es:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':domain/'
+                - !Ref DomainName
+                - /*
+      VPCOptions:
+        SubnetIds:
+          - !Ref PrivateSubnetApp1
+        SecurityGroupIds:
+          - !Ref opsSecurityGroup
+
+  opsSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Security group for OpenSearch service
+      VpcId: !Ref VPC
+      GroupName: !Sub 
+        - 'secgr-${SgName}'
+        - SgName: !Ref DomainName
+      SecurityGroupIngress:
+        - FromPort: 443
+          IpProtocol: tcp
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: True
+        BlockPublicPolicy: True
+        IgnorePublicAcls: True
+        RestrictPublicBuckets: True
+
+# ecr repository
+  AgentToolsRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref ECRRepoName
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: MUTABLE
+
+  # CommandRunner:
+  #   Type: AWSUtility::CloudFormation::CommandRunner
+  #   Properties:
+  #     Command: 'docker pull felix85/bedrock_tools'
+
+# resource to push docker image to ECR
+  EC2InstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: /
+      Roles:
+        - !Ref BedrockAgentToolsFunctionRole
+
+  DockerPushInstance:
+    Type: 'AWS::EC2::Instance'
+    DependsOn:
+      - BedrockAgentToolsFunctionRole
+    Metadata:  
+      AWS::CloudFormation::Init:
+            configSets:
+                ec2_bootstrap:
+                    - install_docker
+            install_docker:
+                packages:
+                    yum:
+                        docker: []
+                services:
+                    sysvinit:
+                        docker:
+                            enabled: "true"
+                            ensureRunning: "true"
+                commands:
+                    docker_for_ec2_user:
+                        command: usermod -G docker ec2-user
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+    Properties:
+      InstanceType: t2.small
+      ImageId: !Ref LatestAmiId
+      KeyName: !Ref EEKeyPair
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: 'true'
+          DeviceIndex: '0'
+          GroupSet:
+            - !Ref opsSecurityGroup
+          SubnetId: !Ref PublicSubnet1
+
+      UserData: !Base64
+        'Fn::Sub':
+          |
+            #!/bin/bash -xe
+            # sudo yum update -y && sudo amazon-linux-extras install docker -y && sudo service docker start && sudo usermod -a -G docker ec2-user
+            su - ec2-user
+            sudo yum update -y aws-cfn-bootstrap
+            # Start cfn-init
+            /opt/aws/bin/cfn-init -s ${AWS::StackId} -r DockerPushInstance --configsets ec2_bootstrap --region ${AWS::Region}
+            
+            sudo docker pull felix85/bedrock_tools
+            sudo docker tag felix85/bedrock_tools:latest ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}
+            aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.us-east-1.amazonaws.com
+            sudo docker push ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}
+            # All done so signal success
+            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackId} --resource DockerPushInstance --region ${AWS::Region}
+
+      Tags:
+        - Key: Name
+          Value: ECR-Loader
+
+
+
+  BedrockAgentToolsFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['_', ['AmazonBedrockExecutionRoleForAgents', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - bedrock.amazonaws.com
+                - athena.amazonaws.com
+                - opensearchservice.amazonaws.com
+                - es.amazonaws.com
+                - osis.amazonaws.com
+                - ec2.amazonaws.com
+                - glue.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+        - 'arn:aws:iam::aws:policy/AWSLambda_FullAccess'
+        - 'arn:aws:iam::aws:policy/SecretsManagerReadWrite'
+        - 'arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole'
+      Policies:
+        - PolicyName: ECRGetAuthorizationToken
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:*
+                Resource: "*"
+        - PolicyName: GlueAthenaBedrockAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:*
+                  - glue:GetTables
+                  - glue:GetTable
+                  - glue:CreateDatabase
+                  - glue:DeleteDatabase
+                  - glue:DeleteCrawler
+                  - glue:CreateCrawler
+                  - glue:StartCrawler
+                  - athena:GetWorkGroup
+                  - athena:StartQueryExecution
+                  - athena:CancelQueryExecution
+                  - athena:StopQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:ListDataCatalogs
+                  - athena:ListWorkGroups
+                  - athena:UpdateWorkGroup
+                Resource: "*"
+        - PolicyName: OpenSearchIngestionAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - osis:Ingest
+                Resource: "*"
+        - PolicyName: CloudWatchAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+        - PolicyName: opensearch
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - 'aoss:*'
+              Resource:
+              - '*'
+        - PolicyName: s3access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - 's3:Get*'
+              - 's3:List*'
+              - 's3:AbortMultipartUpload'
+              - 's3:DeleteObject'
+              - 's3:GetBucketVersioning'
+              - 's3:GetObject'
+              - 's3:GetObjectTagging'
+              - 's3:GetObjectVersion'
+              - 's3:ListBucket'
+              - 's3:ListBucketMultipartUploads'
+              - 's3:ListBucketVersions'
+              - 's3:ListMultipartUploadParts'
+              - 's3:PutBucketVersioning'
+              - 's3:PutObject'
+              - 's3:PutObjectTagging'
+              Resource:
+              - !Sub '${DataBucket.Arn}/*'
+              - !Sub '${DataBucket.Arn}'
+
+  IAMPassAccessPolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyDocument: !Sub |
+          {
+              "Version": "2012-10-17",
+              "Statement": [
+                  {
+                      "Effect": "Allow",
+                      "Action": "iam:PassRole",
+                      "Resource": "arn:aws:iam::${AWS::AccountId}:role/${BedrockAgentToolsFunctionRole}"
+                  }
+              ]
+          }
+            
+      Roles: 
+        - !Ref   BedrockAgentToolsFunctionRole
+      PolicyName: !Join ['_', ['agent_iam_pass_policy', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]

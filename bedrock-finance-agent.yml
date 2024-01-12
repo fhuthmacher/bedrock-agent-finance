@@ -17,11 +17,11 @@ Parameters:
   DomainName:
     Description: User-defined OpenSearch domain name
     Type: String
-    Default: 'observability-demo'
+    Default: 'aos'
   ECRRepoName:
     Description: ECR repo name
     Type: String
-    Default: 'bedrock_tools'
+    Default: 'financetools'
   InstanceType:
     Description: OpenSearchService EC2 instance type
     Type: String
@@ -44,7 +44,7 @@ Parameters:
   AgentName:
     Description: Amazon Bedrock Agent Name
     Type: String
-    Default: 'Agent_Finance'
+    Default: 'financetstagent'
   AgentInstruction:
     Description: Amazon Bedrock Agent Instruction
     Type: String
@@ -52,11 +52,11 @@ Parameters:
   AgentActionGroupName:
     Description: Amazon Bedrock Agent ActionGroupName
     Type: String
-    Default: 'Agent Finance'
+    Default: 'financetstgrp'
   KnowledgeBaseName:
     Description: Amazon Bedrock KnowledgeBase Name
     Type: String
-    Default: 'Finance_KB'
+    Default: 'financetstkb'
   KnowledgeBaseDescription:
     Description: Amazon Bedrock KnowledgeBase Description
     Type: String
@@ -272,7 +272,7 @@ Resources:
   OpenSearchServiceDomain:
     Type: 'AWS::OpenSearchService::Domain'
     Properties:
-      DomainName: !Ref DomainName
+      DomainName: !Join ['', [!Ref DomainName, !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
       EngineVersion: OpenSearch_2.11
       ClusterConfig:
         InstanceCount: 1
@@ -340,11 +340,6 @@ Resources:
         ScanOnPush: true
       ImageTagMutability: MUTABLE
 
-  # CommandRunner:
-  #   Type: AWSUtility::CloudFormation::CommandRunner
-  #   Properties:
-  #     Command: 'docker pull felix85/bedrock_tools'
-
 # resource to push docker image to ECR
   EC2InstanceProfile:
     Type: 'AWS::IAM::InstanceProfile'
@@ -357,6 +352,26 @@ Resources:
     Type: 'AWS::EC2::Instance'
     DependsOn:
       - BedrockAgentToolsFunctionRole
+    Metadata:  
+      AWS::CloudFormation::Init:
+            configSets:
+                ec2_bootstrap:
+                    - install_docker
+            install_docker:
+                packages:
+                    yum:
+                        docker: []
+                services:
+                    sysvinit:
+                        docker:
+                            enabled: "true"
+                            ensureRunning: "true"
+                commands:
+                    docker_for_ec2_user:
+                        command: usermod -G docker ec2-user
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
     Properties:
       InstanceType: t2.small
       ImageId: !Ref LatestAmiId
@@ -368,47 +383,37 @@ Resources:
           GroupSet:
             - !Ref opsSecurityGroup
           SubnetId: !Ref PublicSubnet1
-      UserData: !Base64 
-        'Fn::Join':
-          - ''
-          - - |
-              #!/bin/bash -ex
-            - |
-              'sudo yum update -y && sudo amazon-linux-extras install docker && sudo service docker start && sudo usermod -a -G docker ec2-user
-            - |
-              'docker pull felix85/bedrock_tools'
-            - |
-              'docker tag felix85/bedrock_tools felix85/bedrock_tools:latest '
-            - !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}"
-            - |
-              'docker push '
-            - !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}"
+      UserData: !Base64
+        'Fn::Sub':
+          |
+            #!/bin/bash -xe
+            # sudo yum update -y && sudo amazon-linux-extras install docker -y && sudo service docker start && sudo usermod -a -G docker ec2-user
+            su - ec2-user
+            sudo yum update -y aws-cfn-bootstrap
+            # Start cfn-init
+            /opt/aws/bin/cfn-init -s ${AWS::StackId} -r DockerPushInstance --configsets ec2_bootstrap --region ${AWS::Region}
             
+            sudo docker pull felix85/bedrock_tools
+            sudo docker tag felix85/bedrock_tools:latest ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}
+            aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.us-east-1.amazonaws.com
+            sudo docker push ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}
+            # All done so signal success
+            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackId} --resource DockerPushInstance --region ${AWS::Region}     
       Tags:
         - Key: Name
           Value: ECR-Loader
-
-
-  # # Setup cloud9 environment
-  # Cloud9Environment:
-  #   Type: AWS::Cloud9::EnvironmentEC2
-  #   Properties:
-  #     AutomaticStopTimeMinutes: 30
-  #     Description: 'Tutorial Cloud9 IDE'
-  #     InstanceType: m5.large
-  #     Name: 'Tutorial-Cloud9'
-  #     ImageId: amazonlinux-2-x86_64
-  #     SubnetId: !Ref   PublicSubnet1
 
 # lambda function for Bedrock Agent
   BedrockAgentToolsLambdaFunction:
     Type: AWS::Lambda::Function
     DependsOn: 
       - DockerPushInstance
-      - LambdaSetupFunction
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
     Properties:
       Code:
-        ImageUri: !GetAtt AgentToolsRepository.RepositoryUri
+        ImageUri: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}:latest'
       PackageType: Image
       Role: !GetAtt BedrockAgentToolsFunctionRole.Arn
       VpcConfig:
@@ -433,10 +438,94 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: "bedrock.amazonaws.com"  
 
-# Lambda role
+
+  BedrockKBRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['_', ['AmazonBedrockExecutionRoleForKnowledgeBase_', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - bedrock.amazonaws.com
+                - opensearchservice.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+        - 'arn:aws:iam::aws:policy/SecretsManagerReadWrite'
+
+      Policies:
+        - PolicyName: CloudWatchAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+        - PolicyName: opensearch
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - 'aoss:*'
+              - 'aoss:APIAccessAll'
+              Resource:
+              - !Sub '${TestCollection.Arn}*'
+        - PolicyName: s3access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - 's3:Get*'
+              - 's3:List*'
+              - 's3:AbortMultipartUpload'
+              - 's3:DeleteObject'
+              - 's3:GetBucketVersioning'
+              - 's3:GetObject'
+              - 's3:GetObjectTagging'
+              - 's3:GetObjectVersion'
+              - 's3:ListBucket'
+              - 's3:ListBucketMultipartUploads'
+              - 's3:ListBucketVersions'
+              - 's3:ListMultipartUploadParts'
+              - 's3:PutBucketVersioning'
+              - 's3:PutObject'
+              - 's3:PutObjectTagging'
+              Resource:
+              - !Sub '${DataBucket.Arn}/*'
+              - !Sub '${DataBucket.Arn}'
+  KBPassAccessPolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyDocument: !Sub |
+          {
+              "Version": "2012-10-17",
+              "Statement": [
+                  {
+                      "Effect": "Allow",
+                      "Action": "iam:PassRole",
+                      "Resource": "arn:aws:iam::${AWS::AccountId}:role/${BedrockKBRole}"
+                  }
+              ]
+          }      
+      Roles: 
+        - !Ref   BedrockKBRole
+      PolicyName: !Join ['_', ['kb_iam_pass_policy', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+
+
+
   BedrockAgentToolsFunctionRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Join ['_', ['AmazonBedrockExecutionRoleForAgents', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -560,45 +649,47 @@ Resources:
             
       Roles: 
         - !Ref   BedrockAgentToolsFunctionRole
-      PolicyName: !Join ['_', ['glue_iam_pass_policy', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      PolicyName: !Join ['_', ['agent_iam_pass_policy', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
 
 
   TestCollection:
     Type: 'AWS::OpenSearchServerless::Collection'
+    DependsOn: 
+      - EncryptionPolicy
     Properties:
-      Name: !Sub vector-${AWS::StackName}
+      Name: !Sub vector${AWS::StackName}
       Type: VECTORSEARCH
       Description: Opensearch Vector Collection for FinOps Chat
-    DependsOn: EncryptionPolicy
+    
 
   EncryptionPolicy:
     Type: 'AWS::OpenSearchServerless::SecurityPolicy'
     Properties:
       Name: !Sub ${AWS::StackName}-encrypt
       Type: encryption
-      Description: !Sub Encryption policy for !Sub vector-${AWS::StackName}
+      Description: !Sub Encryption policy for vector-${AWS::StackName}
       Policy: !Sub >-
-        {"Rules":[{"ResourceType":"collection","Resource":["collection/vector-${AWS::StackName}"]}],"AWSOwnedKey":true}
+        {"Rules":[{"ResourceType":"collection","Resource":["collection/vector${AWS::StackName}"]}],"AWSOwnedKey":true}
   
   NetworkPolicy:
     Type: 'AWS::OpenSearchServerless::SecurityPolicy'
     Properties:
       Name: !Sub ${AWS::StackName}-security
       Type: network
-      Description: !Sub Security policy for !Sub vector-${AWS::StackName}
+      Description: !Sub Security policy for vector-${AWS::StackName}
       Policy: !Sub >-
-        [{"Rules":[{"ResourceType":"collection","Resource":["collection/vector-${AWS::StackName}"]}, {"ResourceType":"dashboard","Resource":["collection/vector-${AWS::StackName}"]}],"AllowFromPublic":true}]
+        [{"Rules":[{"ResourceType":"collection","Resource":["collection/vector${AWS::StackName}"]}, {"ResourceType":"dashboard","Resource":["collection/vector${AWS::StackName}"]}],"AllowFromPublic":true}]
   
   TestAccessPolicy:
     Type: 'AWS::OpenSearchServerless::AccessPolicy'
     Properties:
       Name: !Sub ${AWS::StackName}-access
       Type: data
-      Description: !Sub Access policy for !Sub vector-${AWS::StackName}
+      Description: !Sub Access policy for vector-${AWS::StackName}
       Policy: !Sub >-
         [{"Description":"Access for test-user","Rules":[{"ResourceType":"index","Resource":["index/*/*"],"Permission":["aoss:*"]},
-        {"ResourceType":"collection","Resource":["collection/vector-${AWS::StackName}"],"Permission":["aoss:*"]}],
-        "Principal":["${BedrockAgentToolsFunctionRole.Arn}"]}]
+        {"ResourceType":"collection","Resource":["collection/vector${AWS::StackName}"],"Permission":["aoss:*"]}],
+        "Principal":["${BedrockAgentToolsFunctionRole.Arn}", "${BedrockKBRole.Arn}"]}]
 
 
   LambdaSetupFunction:
@@ -608,7 +699,7 @@ Resources:
       - DataBucket
     Properties:
         Description: ""
-        FunctionName: !Join ['_', ['setup_lambda', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+        FunctionName: !Join ['_', ['setup_data_lambda', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
         Handler: "index.lambda_handler"
         Code: 
             ZipFile : |
@@ -621,38 +712,7 @@ Resources:
               import urllib3
               import shutil
               import time
-
-              import subprocess
-
-              def run_shell(cmd):
-                  process = subprocess.Popen(
-                      cmd.split(' '),
-                      encoding='utf-8',
-                      stdin=subprocess.PIPE,
-                      stdout=subprocess.PIPE,
-                  )
-
-                  while(True):
-                      returncode = process.poll()
-                      if returncode is None:
-                          # You describe what is going on.
-                          # You can describe the process every time the time elapses as needed.
-                          # print("running process")
-                          time.sleep(0.01)
-                          data = process.stdout
-                          if data:
-                              # If there is any response, describe it here.
-                              # You need to use readline () or readlines () properly, depending on how the process responds.
-                              msg_line = data.readline()
-                              print(msg_line, end="")
-                          err = process.stderr
-                          if err:
-                              # If there is any error response, describe it here.
-                              msg_line = err.readline()
-                              print(msg_line, end="")
-                      else:
-                          break
-
+              from botocore.exceptions import ClientError
 
               def wait_for_crawler_creation(crawler_name):
                   glue_client = boto3.client('glue')
@@ -710,6 +770,311 @@ Resources:
                   except Exception as e:
                     print(str(e))
                   return "Crawler {} deleted ".format(crawler_name) 
+
+              def configure_athena_result_location(bucket_name):
+                  print('start athena result location configuration')
+                  client = boto3.client('athena')
+                  try:
+                      response = client.get_work_group(WorkGroup='primary')
+                      ConfigurationUpdates={}
+                      ConfigurationUpdates['EnforceWorkGroupConfiguration']= True
+                      ResultConfigurationUpdates= {}
+                      athena_location = "s3://"+ bucket_name +"/athena_results/"
+                      ResultConfigurationUpdates['OutputLocation']=athena_location
+                      EngineVersion = response['WorkGroup']['Configuration']['EngineVersion']
+                      ConfigurationUpdates['ResultConfigurationUpdates']=ResultConfigurationUpdates
+                      ConfigurationUpdates['PublishCloudWatchMetricsEnabled']= response['WorkGroup']['Configuration']['PublishCloudWatchMetricsEnabled']
+                      ConfigurationUpdates['EngineVersion']=EngineVersion
+                      ConfigurationUpdates['RequesterPaysEnabled']= response['WorkGroup']['Configuration']['RequesterPaysEnabled']
+                      response2 = client.update_work_group(WorkGroup='primary',ConfigurationUpdates=ConfigurationUpdates,State='ENABLED')
+                  except Exception as e:
+                    print(str(e))
+                  
+                  print("athena output location updated")
+                  return "athena output location updated to s3://{}/athena_results/".format(bucket_name)                                 
+
+              def provision_s3_dirs(bucket_name,region_name,account_id,ret_dict):
+                  print("BUCKET NAME IS "+bucket_name)
+                  
+                  s3 = boto3.client('s3')
+                  try:
+                    s3.put_object(Bucket=bucket_name, Key=("code/"))
+                    s3.put_object(Bucket=bucket_name, Key=("athena_results/"))
+                    s3.put_object(Bucket=bucket_name, Key=("data/"))
+                    s3.put_object(Bucket=bucket_name, Key=("kb/"))
+
+                  except Exception as e:
+                    print(str(e))
+                  
+                  try:
+                      assets3 = boto3.resource('s3')
+                      if assets3.Bucket(bucket_name).creation_date is None:
+                        if region_name == 'us-east-1':
+                            print('trying to create bucket')
+                            assets3.create_bucket(Bucket=bucket_name)
+                        else:
+                            print('other region')
+                            assets3.create_bucket(Bucket=bucket_name,CreateBucketConfiguration={'LocationConstraint':region_name})
+                        print("Asset bucket {} doesn't exists, created".format(bucket_name))
+                        time.sleep(20)
+                        print("End Timed wait after Asset bucket created")
+                  except Exception as e:
+                      print(str(e))
+                  
+                  configure_athena_result_location(bucket_name)
+                  
+                  ret_dict["WorkshopBucket"]=bucket_name
+                  return ret_dict
+
+              def deploy_assets(bucket_name,region_name,account_id,role_arn, ret_dict):
+                  print("deploy assets to bucket: "+bucket_name)
+                  try :
+                      download_public_files("https://d3q8adh3y5sxpk.cloudfront.net/tutorial/stock_portfolio.csv","stock_portfolio.csv")
+                      download_public_files("https://d3q8adh3y5sxpk.cloudfront.net/tutorial/amazon_10k_2023.pdf","amazon_10k_2023.pdf")
+                      download_public_files("https://d3q8adh3y5sxpk.cloudfront.net/tutorial/agent_aws_openapi.json","agent_aws_openapi.json")
+                      download_public_files("https://d3q8adh3y5sxpk.cloudfront.net/tutorial/opensearch-lib.zip","opensearch-lib.zip")
+                      
+                      s3_client = boto3.client('s3')
+                      s3_client.upload_file('/tmp/stock_portfolio.csv', bucket_name, 'data/stock_portfolio/stock_portfolio.csv')
+                      s3_client.upload_file('/tmp/amazon_10k_2023.pdf', bucket_name, 'kb/amazon_10k_2023.pdf')
+                      s3_client.upload_file('/tmp/agent_aws_openapi.json', bucket_name, 'code/agent_aws_openapi.json')
+                      s3_client.upload_file('/tmp/opensearch-lib.zip', bucket_name, 'code/opensearch-lib.zip')
+                      
+
+                  except Exception as e:
+                      print("Failed provisioning assets "+str(e))
+                  
+                  return ret_dict
+
+              def create_glue_database(bucket_name,GlueDatabaseName, pattern,ret_dict):
+                  print("create Glue database: "+GlueDatabaseName)
+                  try :
+                      glue = boto3.client('glue')
+                      #db_name = GlueDatabaseName+pattern
+                      db_name = 'investment_portfolio'
+                      db_location = "s3://"+ bucket_name +"/database_path/glue-etl-redshift/"
+                      glue.create_database(DatabaseInput={'Name': db_name,'LocationUri': db_location})
+                  except Exception as e:
+                      print("Failed provisioning glue database "+str(e))
+                  ret_dict["DatabaseName"]=db_name
+                  return ret_dict
+
+              
+              def deploy_and_run_glue_crawler(role_arn, pattern, GlueDatabaseName, bucket_name, ret_dict):
+                  print("start Glue crawler creation")
+                  crawler_name = "stockportfolio-"+pattern
+                  db_name = GlueDatabaseName+pattern
+                  print("GlueDatabaseName: " + str(db_name))
+                  ret_dict["CrawlerName"]=crawler_name
+                  job_role = role_arn 
+                  #.rpartition("/")[-1]
+                  
+                  try:
+                      glue_client = boto3.client('glue')
+                      s3_source = "s3://"+ bucket_name +"/data/"
+                      response = glue_client.create_crawler(
+                          Name=crawler_name,
+                          Role=job_role,
+                          DatabaseName=db_name,
+                          Targets={
+                              "S3Targets": [
+                                  {
+                                      "Path": s3_source
+                                  }
+                              ]
+                          },
+                          SchemaChangePolicy={
+                              'UpdateBehavior': 'UPDATE_IN_DATABASE',
+                              'DeleteBehavior': 'DEPRECATE_IN_DATABASE'
+                          },
+                          Description='Crawler for S3',
+                          Configuration='{"Version":1.0,"CrawlerOutput":{"Partitions":{"AddOrUpdateBehavior":"InheritFromTable"},"Tables":{"AddOrUpdateBehavior":"MergeNewColumns"}}}'
+                      )
+                  except Exception as e:
+                      print("Failed provisioning glue crawler "+str(e))
+                  
+                  try:
+                    print("waiting: " + str(60))
+                    time.sleep(60)
+                    #wait_for_crawler_creation(crawler_name)
+                    #print('Crawler', crawler_name, 'is created.')
+                    
+                    response = run_glue_crawler(crawler_name)
+                    print('Crawler', crawler_name, 'is running:', response['ResponseMetadata']['HTTPStatusCode'])
+                  
+                  except Exception as e:
+                      print("Failed running glue crawler "+str(e))
+
+                  return ret_dict
+
+              def handle_delete(bucket_name,GlueDatabaseName, pattern,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr):
+                  dict_return={}
+                  dict_return["Data"]="test_delete"
+                  empty_bucket(bucket_name,region_name,account_id)  
+                  delete_crawler(pattern)
+                  drop_database(GlueDatabaseName, pattern)
+
+                  return dict_return  
+
+              def handle_create(bucket_name,GlueDatabaseName, pattern,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr,kb_role_arn,lambda_arn, kb_collection_url):
+                  print('start handle create')
+                  dict_return={}
+                  dict_return=provision_s3_dirs(bucket_name,region_name, account_id,dict_return)
+                  dict_return=deploy_assets(bucket_name,region_name, account_id,role_arn, dict_return)
+                  dict_return=create_glue_database(bucket_name,GlueDatabaseName,pattern,dict_return)
+                  dict_return=deploy_and_run_glue_crawler(role_arn, pattern, GlueDatabaseName, bucket_name, dict_return)
+
+                  return dict_return
+
+              def lambda_handler(event, context):
+                  response_ = cfnresponse.SUCCESS
+                  print(str(event))
+                  return_dict={}
+                  physical_resourceId = ''.join(random.choices(string.ascii_lowercase +string.digits, k=7))
+                  
+                  
+                  try:
+                      account_id = context.invoked_function_arn.split(":")[4]
+                      role_arn = str(os.environ['ROLE_ARN'])
+                      kb_role_arn = str(os.environ['KB_ROLE_ARN'])
+                      kb_collection_url = str(os.environ['KB_COLLECTION_URL'])
+                      lambda_arn = str(os.environ['LAMBDA_ARN'])
+                      region_name = str(os.environ['AWS_REGION'])
+                      bucket_arg = str(os.environ['BUCKET'])
+                      random_string_arg = str(os.environ['RANDOM_STRING'])
+                      agent_model = str(os.environ['AGENT_MODEL'])
+                      agent_name = str(os.environ['AGENT_NAME'])
+                      agent_instruction = str(os.environ['AGENT_INSTRUCTION'])
+                      agent_actiongroupname = str(os.environ['AGENT_ACTION_GROUP'])
+                      agent_kb_name = str(os.environ['AGENT_KB'])
+                      agent_kb_descr = str(os.environ['AGENT_KB_DESCR'])
+
+                      GlueDatabaseName = agent_name
+
+                      request_type = str(event.get("RequestType",""))
+                      print('picked up event: '+ str(request_type))
+                      if request_type=='Create':
+                          return_dict = handle_create(bucket_arg, GlueDatabaseName, random_string_arg,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr,kb_role_arn,lambda_arn,kb_collection_url)
+                      elif request_type =='Delete':
+                          return_dict = handle_delete(bucket_arg, GlueDatabaseName, random_string_arg,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr)
+                      else:
+                          return_dict = {}
+                          return_dict["Data"] = "testupdate"
+                  except Exception as e:
+                    return_dict['Data'] = str(e)
+                    response_ = cfnresponse.FAILED
+                  cfnresponse.send(event,context,response_,return_dict,physical_resourceId)
+        
+        Role: !GetAtt BedrockAgentToolsFunctionRole.Arn
+        Environment:
+            Variables:
+                BUCKET: !Ref DataBucket
+                RANDOM_STRING: !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]
+                ROLE_ARN: !GetAtt BedrockAgentToolsFunctionRole.Arn
+                KB_ROLE_ARN: !GetAtt BedrockKBRole.Arn
+                KB_COLLECTION_URL: !GetAtt TestCollection.CollectionEndpoint
+                LAMBDA_ARN: !GetAtt BedrockAgentToolsLambdaFunction.Arn
+                AGENT_MODEL: !Ref AgentFoundationModel
+                AGENT_NAME: !Ref AgentName
+                AGENT_INSTRUCTION: !Ref AgentInstruction
+                AGENT_ACTION_GROUP: !Ref AgentActionGroupName
+                AGENT_KB: !Ref KnowledgeBaseName
+                AGENT_KB_DESCR: !Ref KnowledgeBaseDescription
+        Runtime: python3.9
+        Timeout: '900'
+        MemorySize: '128'
+        EphemeralStorage: 
+            Size: 512 
+  
+  EnableSetupLambda:
+    DependsOn:
+      - LambdaSetupFunction
+      - BedrockAgentToolsFunctionRole
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+    Type: Custom::EnableLambda
+    Version: '1.0'
+    Properties:
+        ServiceToken: !GetAtt LambdaSetupFunction.Arn
+
+  AOSlayer:
+    Type: AWS::Lambda::LayerVersion
+    DependsOn: 
+      - LambdaSetupFunction
+    Properties:
+      LayerName: OpenSearchLayer
+      Description: opensearch-py layer
+      Content:
+        S3Bucket: !Ref DataBucket
+        S3Key: 'code/opensearch-lib.zip'
+      CompatibleRuntimes:
+        - python3.9
+        - python3.10
+        - python3.11
+
+  BedrockSetupFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: 
+      - BedrockAgentToolsFunctionRole
+      - DataBucket
+      - AOSlayer
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+    Properties:
+        Description: ""
+        FunctionName: !Join ['_', ['setup_bedrock_lambda', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+        Layers:
+          - !Ref AOSlayer
+          - 'arn:aws:lambda:us-east-1:770693421928:layer:Klayers-p39-boto3:23'
+          - 'arn:aws:lambda:us-east-1:026459568683:layer:requests-aws4auth:1'
+        Handler: "index.lambda_handler"
+        Code: 
+            ZipFile : |
+              import json
+              import boto3
+              import os
+              import cfnresponse
+              import string
+              import random
+              import urllib3
+              import shutil
+              import time
+              from botocore.exceptions import ClientError
+              from opensearchpy import OpenSearch, RequestsHttpConnection
+              from requests_aws4auth import AWS4Auth
+
+              import subprocess
+
+              def run_shell(cmd):
+                  process = subprocess.Popen(
+                      cmd.split(' '),
+                      encoding='utf-8',
+                      stdin=subprocess.PIPE,
+                      stdout=subprocess.PIPE,
+                  )
+
+                  while(True):
+                      returncode = process.poll()
+                      if returncode is None:
+                          # You describe what is going on.
+                          # You can describe the process every time the time elapses as needed.
+                          # print("running process")
+                          time.sleep(0.01)
+                          data = process.stdout
+                          if data:
+                              # If there is any response, describe it here.
+                              # You need to use readline () or readlines () properly, depending on how the process responds.
+                              msg_line = data.readline()
+                              print(msg_line, end="")
+                          err = process.stderr
+                          if err:
+                              # If there is any error response, describe it here.
+                              msg_line = err.readline()
+                              print(msg_line, end="")
+                      else:
+                          break
 
               def delete_bedrock_kb(role_arn,bucket_name,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr, dict_return):
 
@@ -845,161 +1210,17 @@ Resources:
                       print("Unable to Delete Agent.")
                       
                   run_shell(f"aws s3 rm --recursive s3://{knowledge_base_bucket.split(':')[5]}")
-                  run_shell(f"aws s3 rm --recursive s3://{bucket}")
-                  run_shell(f"aws cloudformation delete-stack --stack-name {stack_name}")
-
-                  try:
-                      stack = cfn_client.describe_stacks(StackName=stack_name)
-                      status = stack['Stacks'][0]['StackStatus']
-                  except:
-                      status = "COMPLETE"
-                      
-                  while status == 'DELETE_IN_PROGRESS':
-                      print(f"deleting stack {stack_name}...")
-                      time.sleep(5)
-                      try:
-                          stack = cfn_client.describe_stacks(StackName=stack_name)
-                          status = stack['Stacks'][0]['StackStatus']
-                      except:
-                          status = "COMPLETE"
+                  run_shell(f"aws s3 rm --recursive s3://{knowledge_base_bucket}")
 
 
                   return "bedrock agent and kb {} deleted ".format(agent_name)
 
-              def configure_athena_result_location(bucket_name):
-                  print('start athena result location configuration')
-                  client = boto3.client('athena')
-                  try:
-                      response = client.get_work_group(WorkGroup='primary')
-                      ConfigurationUpdates={}
-                      ConfigurationUpdates['EnforceWorkGroupConfiguration']= True
-                      ResultConfigurationUpdates= {}
-                      athena_location = "s3://"+ bucket_name +"/athena_results/"
-                      ResultConfigurationUpdates['OutputLocation']=athena_location
-                      EngineVersion = response['WorkGroup']['Configuration']['EngineVersion']
-                      ConfigurationUpdates['ResultConfigurationUpdates']=ResultConfigurationUpdates
-                      ConfigurationUpdates['PublishCloudWatchMetricsEnabled']= response['WorkGroup']['Configuration']['PublishCloudWatchMetricsEnabled']
-                      ConfigurationUpdates['EngineVersion']=EngineVersion
-                      ConfigurationUpdates['RequesterPaysEnabled']= response['WorkGroup']['Configuration']['RequesterPaysEnabled']
-                      response2 = client.update_work_group(WorkGroup='primary',ConfigurationUpdates=ConfigurationUpdates,State='ENABLED')
-                  except Exception as e:
-                    print(str(e))
-                  
-                  print("athena output location updated")
-                  return "athena output location updated to s3://{}/athena_results/".format(bucket_name)                                 
-
-              def provision_s3_dirs(bucket_name,region_name,account_id,ret_dict):
-                  print("BUCKET NAME IS "+bucket_name)
-                  
-                  s3 = boto3.client('s3')
-                  try:
-                    s3.put_object(Bucket=bucket_name, Key=("code/"))
-                    s3.put_object(Bucket=bucket_name, Key=("athena_results/"))
-                    s3.put_object(Bucket=bucket_name, Key=("data/"))
-                    s3.put_object(Bucket=bucket_name, Key=("kb/"))
-
-                  except Exception as e:
-                    print(str(e))
-                  
-                  try:
-                      assets3 = boto3.resource('s3')
-                      if assets3.Bucket(bucket_name).creation_date is None:
-                        if region_name == 'us-east-1':
-                            print('trying to create bucket')
-                            assets3.create_bucket(Bucket=bucket_name)
-                        else:
-                            print('other region')
-                            assets3.create_bucket(Bucket=bucket_name,CreateBucketConfiguration={'LocationConstraint':region_name})
-                        print("Asset bucket {} doesn't exists, created".format(bucket_name))
-                        time.sleep(20)
-                        print("End Timed wait after Asset bucket created")
-                  except Exception as e:
-                      print(str(e))
-                  
-                  configure_athena_result_location(bucket_name)
-                  
-                  ret_dict["WorkshopBucket"]=bucket_name
-                  return ret_dict
-
-              def deploy_assets(bucket_name,region_name,account_id,role_arn, ret_dict):
-                  print("deploy assets to bucket: "+bucket_name)
-                  try :
-                      download_public_files("https://d3q8adh3y5sxpk.cloudfront.net/tutorial/stock_portfolio.csv","stock_portfolio.csv")
-                      download_public_files("https://d3q8adh3y5sxpk.cloudfront.net/tutorial/amazon_10k_2023.pdf","amazon_10k_2023.pdf")
-                      download_public_files("https://d3q8adh3y5sxpk.cloudfront.net/tutorial/agent_aws_openapi.json","agent_aws_openapi.json")
-                      s3_client = boto3.client('s3')
-                      s3_client.upload_file('/tmp/stock_portfolio.csv', bucket_name, 'data/stock_portfolio/stock_portfolio.csv')
-                      s3_client.upload_file('/tmp/amazon_10k_2023.pdf', bucket_name, 'kb/amazon_10k_2023.pdf')
-                      s3_client.upload_file('/tmp/agent_aws_openapi.json', bucket_name, 'code/agent_aws_openapi.json')
-
-                  except Exception as e:
-                      print("Failed provisioning assets "+str(e))
-                  
-                  return ret_dict
-
-              def create_glue_database(bucket_name,GlueDatabaseName, pattern,ret_dict):
-                  print("create Glue database: "+GlueDatabaseName)
-                  try :
-                      glue = boto3.client('glue')
-                      #db_name = GlueDatabaseName+pattern
-                      db_name = 'investment_portfolio'
-                      db_location = "s3://"+ bucket_name +"/database_path/glue-etl-redshift/"
-                      glue.create_database(DatabaseInput={'Name': db_name,'LocationUri': db_location})
-                  except Exception as e:
-                      print("Failed provisioning glue database "+str(e))
-                  ret_dict["DatabaseName"]=db_name
-                  return ret_dict
-
-              
-              def deploy_and_run_glue_crawler(role_arn, pattern, GlueDatabaseName, bucket_name, ret_dict):
-                  print("start Glue crawler creation")
-                  crawler_name = "stockportfolio-"+pattern
-                  db_name = GlueDatabaseName+pattern
-                  print("GlueDatabaseName: " + str(db_name))
-                  ret_dict["CrawlerName"]=crawler_name
-                  job_role = role_arn 
-                  #.rpartition("/")[-1]
-                  
-                  try:
-                      glue_client = boto3.client('glue')
-                      s3_source = "s3://"+ bucket_name +"/data/"
-                      response = glue_client.create_crawler(
-                          Name=crawler_name,
-                          Role=job_role,
-                          DatabaseName=db_name,
-                          Targets={
-                              "S3Targets": [
-                                  {
-                                      "Path": s3_source
-                                  }
-                              ]
-                          },
-                          SchemaChangePolicy={
-                              'UpdateBehavior': 'UPDATE_IN_DATABASE',
-                              'DeleteBehavior': 'DEPRECATE_IN_DATABASE'
-                          },
-                          Description='Crawler for S3',
-                          Configuration='{"Version":1.0,"CrawlerOutput":{"Partitions":{"AddOrUpdateBehavior":"InheritFromTable"},"Tables":{"AddOrUpdateBehavior":"MergeNewColumns"}}}'
-                      )
-                  except Exception as e:
-                      print("Failed provisioning glue crawler "+str(e))
-                  
-                  print("waiting: " + str(60))
-                  time.sleep(60)
-                  #wait_for_crawler_creation(crawler_name)
-                  #print('Crawler', crawler_name, 'is created.')
-                  
-                  response = run_glue_crawler(crawler_name)
-                  print('Crawler', crawler_name, 'is running:', response['ResponseMetadata']['HTTPStatusCode'])
-                  
-                  return ret_dict
-
-              def create_bedrock_kb(role_arn,bucket_name,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr, dict_return):
+              def create_bedrock_kb(role_arn,bucket_name,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr,kb_role_arn, lambda_arn, kb_collection_url, collection_arn, dict_return):
 
                   agent_resource_role_arn = role_arn
-                  knowledge_base_resource_role_arn = role_arn
+                  knowledge_base_resource_role_arn = kb_role_arn
                   open_api_s3_url = 's3://' + bucket_name + '/code/agent_aws_openapi.json'
-
+                  
                   agent_id = ""
                   agent_version = ""
                   data_source_id = ""
@@ -1024,6 +1245,10 @@ Resources:
                   }
 
                   response = {}
+                  current_session = boto3.session.Session()
+                  region = current_session.region_name
+                  print(f"The current region is {region}")
+                  bedrock_agent_client = boto3.client('bedrock-agent', region_name = region)
 
                   if agent_id == "":
                       response = bedrock_agent_client.create_agent(**agent_config)
@@ -1036,12 +1261,41 @@ Resources:
 
                   agent_version = agent_versions['agentVersionSummaries'][0]['agentVersion']  
                   print(f"Agent Version: {agent_version}")
-
+                  time.sleep(5)
+                  bucket= bucket_name
+                  print('bucketname: ' + str(bucket))
+                  key = open_api_s3_url[open_api_s3_url[5:].find('/')+6:]
+                  print('bucket key: ' + str(key))
+                  print('action_group_name: ' + str(action_group_name))
+                  print('lambda_arn: ' + str(lambda_arn))
+                  
+                  action_group_config = {
+                      "agentId": agent_id,
+                      "agentVersion": agent_version,
+                      "actionGroupName": action_group_name,
+                      "description": "This action group provides access to AWS account financial data",
+                      "actionGroupExecutor" : {
+                          "lambda": lambda_arn
+                      },
+                      "apiSchema": {
+                          "s3": {
+                              "s3BucketName": bucket,
+                              "s3ObjectKey": key
+                          }
+                      },
+                      "actionGroupState": "ENABLED"
+                  }
+                  
+                  action_group_response = bedrock_agent_client.create_agent_action_group(**action_group_config)
+                  print(str(action_group_response))
+                  action_group_id = action_group_response['agentActionGroup']['actionGroupId']
+                  
+                  response = bedrock_agent_client.prepare_agent(
+                      agentId=agent_id
+                  )
 
                   # set up Opensearch Serverless collection for KB
-                  current_session = boto3.session.Session()
-                  region = current_session.region_name
-                  print(f"The current region is {region}")
+                  opensearch_hostname = kb_collection_url.replace("https://", "")
 
                   service = 'aoss'
                   credentials = current_session.get_credentials()
@@ -1095,8 +1349,7 @@ Resources:
 
                   client.indices.get(index=index_name)
 
-                  # create / update the knowledge base
-
+                  # create knowledge base
                   knowledge_base_config = {
                       "name": knowledge_base_name,
                       "description": knowledge_base_description,
@@ -1110,7 +1363,7 @@ Resources:
                       "storageConfiguration": {
                           "type": 'OPENSEARCH_SERVERLESS',
                           "opensearchServerlessConfiguration": {
-                              "collectionArn": opensearch_collection_arn,
+                              "collectionArn": collection_arn,
                               "vectorIndexName": index_name,
                               "fieldMapping": {
                                   "vectorField": vector_field,
@@ -1123,11 +1376,7 @@ Resources:
 
                   if knowledge_base_id == "":
                       response = bedrock_agent_client.create_knowledge_base(**knowledge_base_config)
-                      knowledge_base_id = response['knowledgeBase']['knowledgeBaseId']
-                  else:
-                      knowledge_base_config["knowledgeBaseId"] = knowledge_base_id
-                      response = bedrock_agent_client.update_knowledge_base(**knowledge_base_config)
-                      
+                      knowledge_base_id = response['knowledgeBase']['knowledgeBaseId']                      
 
                   data_source_id = ""
                   max_token_chunk = 150
@@ -1167,24 +1416,18 @@ Resources:
                       data_source_id = ds_response['dataSource']['dataSourceId']
                   return ret_dict
 
-              def handle_delete(bucket_name,GlueDatabaseName, pattern,role_arn,region_name, account_id):
+              def handle_delete(bucket_name,GlueDatabaseName, pattern,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr):
                   dict_return={}
                   dict_return["Data"]="test_delete"
-                  empty_bucket(bucket_name,region_name,account_id)  
-                  delete_crawler(pattern)
-                  # TO DO: DELETE AOSS collection, Bedrock Agents & KB
-                  drop_database(GlueDatabaseName, pattern)
+                  delete_bedrock_kb(role_arn, bucket_name,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr, dict_return)
 
                   return dict_return  
 
-              def handle_create(bucket_name,GlueDatabaseName, pattern,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr):
+              def handle_create(bucket_name,GlueDatabaseName, pattern,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr,kb_role_arn,lambda_arn, kb_collection_url,collection_arn):
                   print('start handle create')
                   dict_return={}
-                  dict_return=provision_s3_dirs(bucket_name,region_name, account_id,dict_return)
-                  dict_return=deploy_assets(bucket_name,region_name, account_id,role_arn, dict_return)
-                  dict_return=create_glue_database(bucket_name,GlueDatabaseName,pattern,dict_return)
-                  dict_return=deploy_and_run_glue_crawler(role_arn, pattern, GlueDatabaseName, bucket_name, dict_return)
-                  dict_return=create_bedrock_kb(role_arn, bucket_name,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr, dict_return)
+
+                  dict_return=create_bedrock_kb(role_arn, bucket_name,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr,kb_role_arn, lambda_arn, kb_collection_url,collection_arn, dict_return)
 
                   return dict_return
 
@@ -1198,6 +1441,9 @@ Resources:
                   try:
                       account_id = context.invoked_function_arn.split(":")[4]
                       role_arn = str(os.environ['ROLE_ARN'])
+                      kb_role_arn = str(os.environ['KB_ROLE_ARN'])
+                      kb_collection_url = str(os.environ['KB_COLLECTION_URL'])
+                      lambda_arn = str(os.environ['LAMBDA_ARN'])
                       region_name = str(os.environ['AWS_REGION'])
                       bucket_arg = str(os.environ['BUCKET'])
                       random_string_arg = str(os.environ['RANDOM_STRING'])
@@ -1205,17 +1451,24 @@ Resources:
                       agent_name = str(os.environ['AGENT_NAME'])
                       agent_instruction = str(os.environ['AGENT_INSTRUCTION'])
                       agent_actiongroupname = str(os.environ['AGENT_ACTION_GROUP'])
+                      collection_arn = str(os.environ['KB_COLLECTION_ARN'])
                       agent_kb_name = str(os.environ['AGENT_KB'])
                       agent_kb_descr = str(os.environ['AGENT_KB_DESCR'])
+                      ec2_instance_id = str(os.environ['EC2_TEMP_INSTANCE'])
 
                       GlueDatabaseName = agent_name
 
                       request_type = str(event.get("RequestType",""))
                       print('picked up event: '+ str(request_type))
                       if request_type=='Create':
-                          return_dict = handle_create(bucket_arg, GlueDatabaseName, random_string_arg,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr)
+                          return_dict = handle_create(bucket_arg, GlueDatabaseName, random_string_arg,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr,kb_role_arn,lambda_arn,kb_collection_url,collection_arn)
+                          # delete temp EC2 instance
+                          ec2client = boto3.client('ec2', region_name='us-east-1')
+                          ec2client.stop_instances(InstanceIds=[ec2_instance_id])
+                          ec2client.terminate_instances(InstanceIds=[ec2_instance_id])
+
                       elif request_type =='Delete':
-                          return_dict = handle_delete(bucket_arg, GlueDatabaseName, random_string_arg,role_arn,region_name, account_id)
+                          return_dict = handle_delete(bucket_arg, GlueDatabaseName, random_string_arg,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr)
                       else:
                           return_dict = {}
                           return_dict["Data"] = "testupdate"
@@ -1230,30 +1483,34 @@ Resources:
                 BUCKET: !Ref DataBucket
                 RANDOM_STRING: !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]
                 ROLE_ARN: !GetAtt BedrockAgentToolsFunctionRole.Arn
+                KB_ROLE_ARN: !GetAtt BedrockKBRole.Arn
+                KB_COLLECTION_ARN: !GetAtt TestCollection.Arn
+                KB_COLLECTION_URL: !GetAtt TestCollection.CollectionEndpoint
+                LAMBDA_ARN: !GetAtt BedrockAgentToolsLambdaFunction.Arn
                 AGENT_MODEL: !Ref AgentFoundationModel
                 AGENT_NAME: !Ref AgentName
                 AGENT_INSTRUCTION: !Ref AgentInstruction
                 AGENT_ACTION_GROUP: !Ref AgentActionGroupName
                 AGENT_KB: !Ref KnowledgeBaseName
                 AGENT_KB_DESCR: !Ref KnowledgeBaseDescription
+                EC2_TEMP_INSTANCE: !Ref DockerPushInstance
         Runtime: python3.9
         Timeout: '900'
         MemorySize: '128'
         EphemeralStorage: 
-            Size: 512 
-  
-  EnableLambda:
+            Size: 512
+
+  EnableBedrockLambda:
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
     DependsOn:
-      - LambdaSetupFunction
+      - BedrockSetupFunction
       - BedrockAgentToolsFunctionRole
     Type: Custom::EnableLambda
     Version: '1.0'
     Properties:
-        ServiceToken: !GetAtt LambdaSetupFunction.Arn
-
-
-
-
+        ServiceToken: !GetAtt BedrockSetupFunction.Arn
 Outputs:
   StackName:
     Description: This is the stack name.
