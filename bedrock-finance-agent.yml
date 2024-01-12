@@ -691,7 +691,7 @@ Resources:
                         # region: "${AWS::Region}"
                         # Provide a Role ARN with access to the bucket. This role should have a trust relationship with osis-pipelines.amazonaws.com
                         # sts_role_arn: "${BedrockAgentToolsFunctionRole.Arn}"  
-                        
+
 # lambda function for Bedrock Agent
   BedrockAgentToolsLambdaFunction:
     Type: AWS::Lambda::Function
@@ -1286,9 +1286,6 @@ Resources:
     DependsOn:
       - LambdaSetupFunction
       - BedrockAgentToolsFunctionRole
-    CreationPolicy:
-      ResourceSignal:
-        Timeout: PT15M
     Type: Custom::EnableLambda
     Version: '1.0'
     Properties:
@@ -1315,9 +1312,6 @@ Resources:
       - BedrockAgentToolsFunctionRole
       - DataBucket
       - AOSlayer
-    CreationPolicy:
-      ResourceSignal:
-        Timeout: PT15M
     Properties:
         Description: ""
         FunctionName: !Join ['_', ['setup_bedrock_lambda', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
@@ -1765,6 +1759,10 @@ Resources:
 
                       elif request_type =='Delete':
                           return_dict = handle_delete(bucket_arg, GlueDatabaseName, random_string_arg,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr)
+                          # delete temp EC2 instance
+                          ec2client = boto3.client('ec2', region_name='us-east-1')
+                          ec2client.stop_instances(InstanceIds=[ec2_instance_id])
+                          ec2client.terminate_instances(InstanceIds=[ec2_instance_id])
                       else:
                           return_dict = {}
                           return_dict["Data"] = "testupdate"
@@ -1797,9 +1795,6 @@ Resources:
             Size: 512
 
   EnableBedrockLambda:
-    CreationPolicy:
-      ResourceSignal:
-        Timeout: PT15M
     DependsOn:
       - BedrockSetupFunction
       - BedrockAgentToolsFunctionRole
