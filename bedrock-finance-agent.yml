@@ -370,9 +370,6 @@ Resources:
                 commands:
                     docker_for_ec2_user:
                         command: usermod -G docker ec2-user
-    CreationPolicy:
-      ResourceSignal:
-        Timeout: PT15M
     Properties:
       InstanceType: t2.small
       ImageId: !Ref LatestAmiId
@@ -396,7 +393,7 @@ Resources:
             
             sudo docker pull felix85/bedrock_tools
             sudo docker tag felix85/bedrock_tools:latest ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}
-            aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.us-east-1.amazonaws.com
+            aws ecr get-login-password --region ${AWS::Region} | sudo docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
             sudo docker push ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepoName}
             # All done so signal success
             /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackId} --resource DockerPushInstance --region ${AWS::Region}     
@@ -841,8 +838,10 @@ Resources:
         - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
         - 'arn:aws:iam::aws:policy/AWSLambda_FullAccess'
         - 'arn:aws:iam::aws:policy/AmazonBedrockFullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonEC2FullAccess'
         - 'arn:aws:iam::aws:policy/SecretsManagerReadWrite'
         - 'arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole'
+
       Policies:
         - PolicyName: ECRGetAuthorizationToken
           PolicyDocument:
@@ -1744,11 +1743,11 @@ Resources:
                       knowledgeBaseState='ENABLED'
                   )
                   print(f"associate_agent_knowledge_base response: {response}")
-                  print("Deploy / Update Complete")
+                  print("Deploy Complete")
 
 
-
-                  return ret_dict
+                  dict_return["Bedrock"]="deployment of Bedrock Agent and KB complete"
+                  return dict_return
 
               def handle_delete(bucket_name,GlueDatabaseName, pattern,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr):
                   dict_return={}
@@ -1789,7 +1788,7 @@ Resources:
                       agent_kb_name = str(os.environ['AGENT_KB'])
                       agent_kb_descr = str(os.environ['AGENT_KB_DESCR'])
                       ec2_instance_id = str(os.environ['EC2_TEMP_INSTANCE'])
-
+                      ecr_repo = str(os.environ['ECR_REPO'])
                       GlueDatabaseName = agent_name
 
                       request_type = str(event.get("RequestType",""))
@@ -1797,16 +1796,32 @@ Resources:
                       if request_type=='Create':
                           return_dict = handle_create(bucket_arg, GlueDatabaseName, random_string_arg,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr,kb_role_arn,lambda_arn,kb_collection_url,collection_arn)
                           # delete temp EC2 instance
-                          ec2client = boto3.client('ec2', region_name='us-east-1')
-                          ec2client.stop_instances(InstanceIds=[ec2_instance_id])
-                          ec2client.terminate_instances(InstanceIds=[ec2_instance_id])
+                          ec2client = boto3.client('ec2', region_name=region_name)
+                          print(f"stopping ec2 instance id: {ec2_instance_id}")
+                          response = ec2client.stop_instances(InstanceIds=[ec2_instance_id])
+                          print(f"response from stopping EC2 instance: {response}")
+                          time.sleep(20)
+                          print(f"terminating ec2 instance id: {ec2_instance_id}")
+                          response = ec2client.terminate_instances(InstanceIds=[ec2_instance_id])
+                          print(f"response from terminating EC2 instance: {response}")
 
                       elif request_type =='Delete':
                           return_dict = handle_delete(bucket_arg, GlueDatabaseName, random_string_arg,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr)
                           # delete temp EC2 instance
-                          ec2client = boto3.client('ec2', region_name='us-east-1')
-                          ec2client.stop_instances(InstanceIds=[ec2_instance_id])
-                          ec2client.terminate_instances(InstanceIds=[ec2_instance_id])
+                          ec2client = boto3.client('ec2', region_name=region_name)
+                          print(f"stopping ec2 instance id: {ec2_instance_id}")
+                          response = ec2client.stop_instances(InstanceIds=[ec2_instance_id])
+                          print(f"response from stopping EC2 instance: {response}")
+                          time.sleep(20)
+                          print(f"terminating ec2 instance id: {ec2_instance_id}")
+                          response = ec2client.terminate_instances(InstanceIds=[ec2_instance_id])
+                          print(f"response from terminating EC2 instance: {response}")
+                          ecrclient = boto3.client('ecr')
+                          response = ecrclient.delete_repository(
+                              registryId=account_id,
+                              repositoryName=ecr_repo,
+                              force=True
+                          )
                       else:
                           return_dict = {}
                           return_dict["Data"] = "testupdate"
@@ -1832,6 +1847,7 @@ Resources:
                 AGENT_KB: !Ref KnowledgeBaseName
                 AGENT_KB_DESCR: !Ref KnowledgeBaseDescription
                 EC2_TEMP_INSTANCE: !Ref DockerPushInstance
+                ECR_REPO: !Ref ECRRepoName
         Runtime: python3.9
         Timeout: '900'
         MemorySize: '128'
@@ -1948,7 +1964,3 @@ Outputs:
       'Fn::GetAtt':
         - OpenSearchServiceDomain
         - DomainEndpoint
-  AgentToolsRepositoryUri:
-    Value: !GetAtt AgentToolsRepository.RepositoryURi
-    Export:
-      Name: 'ECRUri'
