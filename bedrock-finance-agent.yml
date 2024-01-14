@@ -749,6 +749,7 @@ Resources:
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
         - 'arn:aws:iam::aws:policy/SecretsManagerReadWrite'
+        - 'arn:aws:iam::aws:policy/AmazonBedrockFullAccess'
       Policies:
         - PolicyName: CloudWatchAccess
           PolicyDocument:
@@ -839,6 +840,7 @@ Resources:
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
         - 'arn:aws:iam::aws:policy/AWSLambda_FullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonBedrockFullAccess'
         - 'arn:aws:iam::aws:policy/SecretsManagerReadWrite'
         - 'arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole'
       Policies:
@@ -1294,7 +1296,7 @@ Resources:
   AOSlayer:
     Type: AWS::Lambda::LayerVersion
     DependsOn: 
-      - LambdaSetupFunction
+      - EnableSetupLambda
     Properties:
       LayerName: OpenSearchLayer
       Description: opensearch-py layer
@@ -1315,6 +1317,11 @@ Resources:
     Properties:
         Description: ""
         FunctionName: !Join ['_', ['setup_bedrock_lambda', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+        VpcConfig:
+          SecurityGroupIds: 
+            - !Ref opsSecurityGroup
+          SubnetIds:
+            - !Ref PrivateSubnetApp1
         Layers:
           - !Ref AOSlayer
           - 'arn:aws:lambda:us-east-1:770693421928:layer:Klayers-p39-boto3:23'
@@ -1513,10 +1520,11 @@ Resources:
                   
                   agent_id = ""
                   agent_version = ""
+                  knowledge_base_id = ""
                   data_source_id = ""
                   action_group_id = ""
 
-                  knowledge_base_bucket = bucket_name
+                  knowledge_base_bucket_arn = 'arn:aws:s3:::' + bucket_name
                   foundation_model = agent_model
                   instruction = agent_instruction
                   description = agent_instruction
@@ -1543,9 +1551,6 @@ Resources:
                   if agent_id == "":
                       response = bedrock_agent_client.create_agent(**agent_config)
                       agent_id = response['agent']['agentId']
-                  else:
-                      agent_config["agentId"] = agent_id
-                      response = bedrock_agent_client.update_agent(**agent_config)
                       
                   agent_versions = bedrock_agent_client.list_agent_versions(agentId = agent_id)
 
@@ -1687,7 +1692,7 @@ Resources:
                       "dataSourceConfiguration": {
                           "type": 'S3',
                           "s3Configuration": {
-                              "bucketArn": knowledge_base_bucket
+                              "bucketArn": knowledge_base_bucket_arn
                           }
                       },
                       "vectorIngestionConfiguration": {
@@ -1701,9 +1706,48 @@ Resources:
                       }
                   }
 
-                  if data_source_id == "":
-                      ds_response = bedrock_agent_client.create_data_source(**data_source_config)
-                      data_source_id = ds_response['dataSource']['dataSourceId']
+                  ds_response = bedrock_agent_client.create_data_source(**data_source_config)
+                  data_source_id = ds_response['dataSource']['dataSourceId']
+                  
+                  response = bedrock_agent_client.list_data_sources( knowledgeBaseId=knowledge_base_id)
+                  for data_source in response['dataSourceSummaries']:
+                      if data_source['knowledgeBaseId'] == knowledge_base_id:
+                          data_source_id = data_source['dataSourceId']
+
+                  print(f"data_source_id: {data_source_id}")
+                  
+                  ingestion_response = bedrock_agent_client.start_ingestion_job(knowledgeBaseId=knowledge_base_id,dataSourceId=data_source_id)
+                  print(f"ingestion response: {ingestion_response}")
+                  
+                  ingestion_job = ingestion_response['ingestionJob']['ingestionJobId']
+                  print(f"ingestionJobId: {ingestion_job}")
+                  status = 'IN_PROGRESS'
+                  response = {}
+                  
+                  while status == 'IN_PROGRESS':
+                      response = bedrock_agent_client.get_ingestion_job(
+                          knowledgeBaseId=knowledge_base_id,
+                          dataSourceId=data_source_id,
+                          ingestionJobId=ingestion_job
+                      )
+                      
+                      status = response['ingestionJob']['status']
+                      time.sleep(5)
+                  
+                  print(response['ingestionJob']['statistics'])
+                  
+                  response = bedrock_agent_client.associate_agent_knowledge_base(
+                      agentId=agent_id,
+                      agentVersion=agent_version,
+                      knowledgeBaseId=knowledge_base_id,
+                      description='"This knowledge base provides access to financial data"',
+                      knowledgeBaseState='ENABLED'
+                  )
+                  print(f"associate_agent_knowledge_base response: {response}")
+                  print("Deploy / Update Complete")
+
+
+
                   return ret_dict
 
               def handle_delete(bucket_name,GlueDatabaseName, pattern,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr):
