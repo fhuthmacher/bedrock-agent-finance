@@ -11,7 +11,7 @@ RUN yum install unzip aws-cli -y
 
 RUN mkdir -p /opt
 
-RUN curl $(aws lambda get-layer-version-by-arn --arn arn:aws:lambda:us-east-1:901920570463:layer:aws-otel-python-amd64-ver-1-20-0:3 --query 'Content.Location' --output text) --output layer.zip
+RUN curl $(aws lambda get-layer-version-by-arn --arn arn:aws:lambda:us-east-1:901920570463:layer:aws-otel-python-amd64-ver-1-21-0:1 --query 'Content.Location' --output text) --output layer.zip
 RUN unzip layer.zip -d /opt
 RUN rm layer.zip
 

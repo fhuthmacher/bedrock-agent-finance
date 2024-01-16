@@ -710,11 +710,11 @@ Resources:
       Environment:
         Variables:
           AWS_LAMBDA_EXEC_WRAPPER: '/opt/otel-instrument'
-          OPENTELEMETRY_COLLECTOR_CONFIG_FILE: '/var/task/collector.yaml'
+          OPENTELEMETRY_COLLECTOR_CONFIG_FILE: '/var/task/collector.yml'
           OTEL_SERVICE_NAME: 'FinancialAgent'
-          LOGS_ENDPOINT: !Select [0, !GetAtt OpenSearchIngestionLogPipeline.IngestEndpointUrls]
-          METRICS_ENDPOINT: !Select [0, !GetAtt OpenSearchIngestionMetricPipeline.IngestEndpointUrls]
-          TRACE_ENDPOINT: !Select [0, !GetAtt OpenSearchIngestionTracePipeline.IngestEndpointUrls]
+          LOGS_ENDPOINT: !Join ['', ['https://', !Select [0, !GetAtt OpenSearchIngestionLogPipeline.IngestEndpointUrls]]]
+          METRICS_ENDPOINT: !Join ['', ['https://', !Select [0, !GetAtt OpenSearchIngestionMetricPipeline.IngestEndpointUrls]]]
+          TRACE_ENDPOINT: !Join ['', ['https://', !Select [0, !GetAtt OpenSearchIngestionTracePipeline.IngestEndpointUrls]]]
       Timeout: 900
       EphemeralStorage: 
         Size: 1028
