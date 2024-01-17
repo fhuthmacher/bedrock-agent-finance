@@ -300,8 +300,8 @@ Resources:
                 - ':'
                 - !Ref 'AWS::AccountId'
                 - ':domain/'
-                - !Ref DomainName
-                - /*
+                #- !Join ['', [!Ref DomainName, !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+                - '*'
       VPCOptions:
         SubnetIds:
           - !Ref PrivateSubnetApp1
@@ -883,6 +883,8 @@ Resources:
                 Action:
                   - osis:Ingest
                   - 'es:describeDomain'
+                  - 'es:ESHttpGet'
+                  - 'es:ESHttpPut'
                 Resource: "*"
         - PolicyName: CloudWatchAccess
           PolicyDocument:
@@ -1449,7 +1451,7 @@ Resources:
                       "agentVersion": agent_version,
                       "actionGroupId": action_group_id,
                       "actionGroupName": action_group_name,
-                      "description": "This action group provides access to AWS account financial data",
+                      "description": "Agent Finance is an automated, AI-powered agent that helps customers with financial investments by retrieving financial data about companies from the internet and checking a users existing portfolio.",
                       "actionGroupExecutor" : {
                           "lambda": lambda_arn
                       },
@@ -1567,7 +1569,7 @@ Resources:
                       "agentId": agent_id,
                       "agentVersion": agent_version,
                       "actionGroupName": action_group_name,
-                      "description": "This action group provides access to AWS account financial data",
+                      "description": "Agent Finance is an automated, AI-powered agent that helps customers with financial investments by retrieving financial data about companies from the internet and checking a users existing portfolio.",
                       "actionGroupExecutor" : {
                           "lambda": lambda_arn
                       },
