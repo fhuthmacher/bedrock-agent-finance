@@ -6,11 +6,11 @@
         "description": "Agent Finance is an automated, AI-powered agent that helps a portfolio owner with knowledge of public financial information about companies and the investor's existing investment portfolio and then provides financial investment advice accordingly."
     },
     "paths": {
-        "/get_investment_research": {
+        "/retrieve_inv_research": {
             "get": {
                 "summary": "Financial investment research",
                 "description": "Get public financial information of a company to answer a question. The API takes in the query then returns the corresponding financial public information",
-                "operationId": "financialInformation",
+                "operationId": "retrieve_inv_research",
                 "parameters": [
                     {
                         "name": "query",
@@ -43,16 +43,16 @@
             }
         }
         ,
-        "/get_existing_portfolio": {
+        "/retrieve_exist_port": {
         "get": {
             "summary": "Get existing investment portfolio of the user from the tools module with the query",
             "description": "Get existing investment portfolio of the user from the tools module with the query to check diversification. The API takes in the username and returns the user's investment portfolio along with the percentage of holdings",
-            "operationId": "portfolio",
+            "operationId": "retrieve_exist_port",
             "parameters": [
                 {
-                    "name": "username",
+                    "name": "usernameinput",
                     "in": "path",
-                    "description": "username",
+                    "description": "usernameinput",
                     "required": true,
                     "schema": {
                         "type": "string"

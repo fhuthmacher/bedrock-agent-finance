@@ -31,3 +31,5 @@ The CloudFormation stack will create following resources in your account:
 - temporary EC2 instance to pull and push Docker image to ECR
 
 To avoid incurring additional charges to your account, stop and delete all of the resources by deleting the CloudFormation template at the end of this tutorial.
+
+If you have any issues with the Lambda extension, add the environment variable OPENTELEMETRY_EXTENSION_LOG_LEVEL for troubleshooting.

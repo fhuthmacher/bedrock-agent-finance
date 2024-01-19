@@ -21,37 +21,48 @@ from langchain.tools import DuckDuckGoSearchRun
 import csv
 from io import StringIO
 
-import logging
+
 
 from opentelemetry import trace
 
 ### Explicitly added for logging which is currently in experimental stage and not working with auto-instrumentation
 ### OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED = true
 ### BEG
+import logging
 from opentelemetry._logs import get_logger
+from opentelemetry._logs import get_logger_provider
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.http._log_exporter import (
    OTLPLogExporter,
 )
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, SimpleLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 
+from opentelemetry.sdk.extension.aws.resource._lambda import (
+  AwsLambdaResourceDetector,
+)
+from opentelemetry.sdk.resources import get_aggregated_resources
+
 logger_provider = LoggerProvider(
-   resource=Resource.create(
-       {
-           "service.name": "FinancialAgent"
-       }
-   ),
+    resource=get_aggregated_resources(
+          [
+              AwsLambdaResourceDetector(),
+          ]
+      ),
 )
 set_logger_provider(logger_provider)
-exporter = OTLPLogExporter()
+
+exporter = OTLPLogExporter(endpoint='http://0.0.0.0:4318/v1/logs')
 logger_provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
 handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
 # Attach OTLP handler to root logger
-logging.getLogger().addHandler(handler)
-logger = logging.getLogger("FinancialAgent")
+logger = logging.getLogger().addHandler(handler)
+# Create different namespaced loggers
+loggerTools = logging.getLogger("financeagent.tools")
+loggerTools.setLevel(os.environ['OTEL_LOG_LEVEL'])
 ### END
+
 
 ## Creates a tracer from the global tracer provider
 tracer = trace.get_tracer("FinancialAgent")
@@ -117,7 +128,7 @@ def call_titan(prompt):
     )
     response_body = json.loads(response.get("body").read())
 
-    print(response_body)
+    loggerTools.debug(str(response_body))
 
     results = response_body.get("results")[0].get("outputText")
     return results
@@ -238,7 +249,7 @@ def get_existing_portfolio(username):
     query = 'SELECT * FROM "' + databaseName + '"."' + tableName + '";'
 
     # run the query
-    logger.info('run Athena query ' + str(query))
+    loggerTools.debug('run Athena query ' + str(query))
     athena_response = athena.start_query_execution(
         QueryString=query,
         QueryExecutionContext={
@@ -247,23 +258,23 @@ def get_existing_portfolio(username):
     )
     # Get the query execution ID
     query_execution_id = athena_response['QueryExecutionId']
-    logger.info('Athena query execution id ' + str(query_execution_id))
+    loggerTools.debug('Athena query execution id ' + str(query_execution_id))
     # Check the status of the query execution
     while True:
         response = athena.get_query_execution(
             QueryExecutionId=query_execution_id
         )
         status = response['QueryExecution']['Status']['State']
-        logger.info('Athena query execution status ' + str(status))
+        loggerTools.debug('Athena query execution status ' + str(status))
         if status in ['SUCCEEDED', 'FAILED', 'CANCELLED']:
             break
-        logger.info('sleep 5')
+        loggerTools.debug('sleep 5')
         time.sleep(5)
 
     # Check if the query was successful
     if status == 'SUCCEEDED':
         # Get the results
-        logger.info('Athena get query results')
+        loggerTools.debug('Athena get query results')
         results_response = athena.get_query_results(
             QueryExecutionId=query_execution_id
         )
@@ -281,9 +292,9 @@ def get_existing_portfolio(username):
 
         # Get the CSV string
         existing_portfolio =  "{" + csv_output.getvalue() + "}"
-        logger.info(str(existing_portfolio))
+        loggerTools.debug(str(existing_portfolio))
     else:
-        logger.error('Query execution failed: {}'.format(status))
+        loggerTools.error('Query execution failed: {}'.format(status))
             
     # table with holding name & percentage
 

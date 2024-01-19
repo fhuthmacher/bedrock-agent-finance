@@ -715,6 +715,7 @@ Resources:
           LOGS_ENDPOINT: !Join ['', ['https://', !Select [0, !GetAtt OpenSearchIngestionLogPipeline.IngestEndpointUrls],'/v1/logs']]
           METRICS_ENDPOINT: !Join ['', ['https://', !Select [0, !GetAtt OpenSearchIngestionMetricPipeline.IngestEndpointUrls],'/v1/metrics']]
           TRACE_ENDPOINT: !Join ['', ['https://', !Select [0, !GetAtt OpenSearchIngestionTracePipeline.IngestEndpointUrls],'/v1/traces']]
+          OTEL_LOG_LEVEL: 'DEBUG'
       Timeout: 900
       EphemeralStorage: 
         Size: 1028
