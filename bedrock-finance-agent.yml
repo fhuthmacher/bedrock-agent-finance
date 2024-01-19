@@ -48,11 +48,15 @@ Parameters:
   AgentInstruction:
     Description: Amazon Bedrock Agent Instruction
     Type: String
-    Default: 'Agent Finance is an automated, AI-powered agent that helps customers with financial investments.'
+    Default: 'Agent Finance is an automated, AI-powered agent that helps customers with financial investments by getting financial information about companies from the internet and retrieving a users existing investment portfolio.'
   AgentActionGroupName:
     Description: Amazon Bedrock Agent ActionGroupName
     Type: String
     Default: 'financetstgrp'
+  AgentActionGroupDescription:
+    Description: Amazon Bedrock Agent Instruction
+    Type: String
+    Default: 'This action group provides two methods. The first method retrieves financial information about a company  and the second method retrieves a users existing investment portfolio to provide context and ensure a diversified portfolio.'
   KnowledgeBaseName:
     Description: Amazon Bedrock KnowledgeBase Name
     Type: String
@@ -60,7 +64,7 @@ Parameters:
   KnowledgeBaseDescription:
     Description: Amazon Bedrock KnowledgeBase Description
     Type: String
-    Default: 'This knowledge base contains financial information.'    
+    Default: 'This knowledge base contains financial information about companys such as quarterly reports and 10k reports.'    
 Resources:
   VPC:
     Type: 'AWS::EC2::VPC'
@@ -1278,6 +1282,7 @@ Resources:
                 AGENT_NAME: !Ref AgentName
                 AGENT_INSTRUCTION: !Ref AgentInstruction
                 AGENT_ACTION_GROUP: !Ref AgentActionGroupName
+                AGENT_ACTION_DESCR: !Ref AgentActionGroupDescription
                 AGENT_KB: !Ref KnowledgeBaseName
                 AGENT_KB_DESCR: !Ref KnowledgeBaseDescription
         Runtime: python3.9
@@ -1514,7 +1519,7 @@ Resources:
 
                   return "bedrock agent and kb {} deleted ".format(agent_name)
 
-              def create_bedrock_kb(role_arn,bucket_name,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr,kb_role_arn, lambda_arn, kb_collection_url, collection_arn, dict_return):
+              def create_bedrock_kb(role_arn,bucket_name,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_actiongroupdescr,agent_kb_name,agent_kb_descr,kb_role_arn, lambda_arn, kb_collection_url, collection_arn, dict_return):
 
                   agent_resource_role_arn = role_arn
                   knowledge_base_resource_role_arn = kb_role_arn
@@ -1570,7 +1575,7 @@ Resources:
                       "agentId": agent_id,
                       "agentVersion": agent_version,
                       "actionGroupName": action_group_name,
-                      "description": "Agent Finance is an automated, AI-powered agent that helps customers with financial investments by retrieving financial data about companies from the internet and checking a users existing portfolio.",
+                      "description": agent_actiongroupdescr,
                       "actionGroupExecutor" : {
                           "lambda": lambda_arn
                       },
@@ -1759,11 +1764,11 @@ Resources:
 
                   return dict_return  
 
-              def handle_create(bucket_name,GlueDatabaseName, pattern,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr,kb_role_arn,lambda_arn, kb_collection_url,collection_arn):
+              def handle_create(bucket_name,GlueDatabaseName, pattern,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_actiongroupdescr, agent_kb_name,agent_kb_descr,kb_role_arn,lambda_arn, kb_collection_url,collection_arn):
                   print('start handle create')
                   dict_return={}
 
-                  dict_return=create_bedrock_kb(role_arn, bucket_name,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr,kb_role_arn, lambda_arn, kb_collection_url,collection_arn, dict_return)
+                  dict_return=create_bedrock_kb(role_arn, bucket_name,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_actiongroupdescr,agent_kb_name,agent_kb_descr,kb_role_arn, lambda_arn, kb_collection_url,collection_arn, dict_return)
 
                   return dict_return
 
@@ -1787,6 +1792,7 @@ Resources:
                       agent_name = str(os.environ['AGENT_NAME'])
                       agent_instruction = str(os.environ['AGENT_INSTRUCTION'])
                       agent_actiongroupname = str(os.environ['AGENT_ACTION_GROUP'])
+                      agent_actiongroupdescr = str(os.environ['AGENT_ACTION_DESCR'])
                       collection_arn = str(os.environ['KB_COLLECTION_ARN'])
                       agent_kb_name = str(os.environ['AGENT_KB'])
                       agent_kb_descr = str(os.environ['AGENT_KB_DESCR'])
@@ -1797,7 +1803,7 @@ Resources:
                       request_type = str(event.get("RequestType",""))
                       print('picked up event: '+ str(request_type))
                       if request_type=='Create':
-                          return_dict = handle_create(bucket_arg, GlueDatabaseName, random_string_arg,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_kb_name,agent_kb_descr,kb_role_arn,lambda_arn,kb_collection_url,collection_arn)
+                          return_dict = handle_create(bucket_arg, GlueDatabaseName, random_string_arg,role_arn,region_name, account_id,agent_model,agent_name,agent_instruction,agent_actiongroupname,agent_actiongroupdescr,agent_kb_name,agent_kb_descr,kb_role_arn,lambda_arn,kb_collection_url,collection_arn)
                           # delete temp EC2 instance
                           ec2client = boto3.client('ec2', region_name=region_name)
                           print(f"stopping ec2 instance id: {ec2_instance_id}")
