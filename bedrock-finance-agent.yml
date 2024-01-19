@@ -1853,6 +1853,7 @@ Resources:
                 AGENT_NAME: !Ref AgentName
                 AGENT_INSTRUCTION: !Ref AgentInstruction
                 AGENT_ACTION_GROUP: !Ref AgentActionGroupName
+                AGENT_ACTION_DESCR: !Ref AgentActionGroupDescription
                 AGENT_KB: !Ref KnowledgeBaseName
                 AGENT_KB_DESCR: !Ref KnowledgeBaseDescription
                 EC2_TEMP_INSTANCE: !Ref DockerPushInstance
