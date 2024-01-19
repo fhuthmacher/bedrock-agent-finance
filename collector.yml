@@ -31,16 +31,16 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      exporters: [otlphttp, logging]
+      exporters: [otlphttp]
 
     metrics:
       receivers: [otlp]
-      exporters: [otlphttp, logging]
+      exporters: [otlphttp]
     
     logs:
       receivers: [otlp]
-      exporters: [otlphttp, logging]
+      exporters: [otlphttp]
       
-  telemetry:
-    metrics:
-      address: 0.0.0.0:8888
+  #telemetry:
+  #  metrics:
+  #    address: 0.0.0.0:8888
