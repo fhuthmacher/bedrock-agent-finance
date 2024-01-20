@@ -48,7 +48,7 @@ Parameters:
   AgentInstruction:
     Description: Amazon Bedrock Agent Instruction
     Type: String
-    Default: 'Agent Finance is an automated, AI-powered agent that helps customers with financial investments by getting financial information about companies from the internet and retrieving a users existing investment portfolio.'
+    Default: 'Agent Finance is an AI-powered agent that helps customers by retrieving financial information about companies and retrieving a users existing portfolio.'
   AgentActionGroupName:
     Description: Amazon Bedrock Agent ActionGroupName
     Type: String
