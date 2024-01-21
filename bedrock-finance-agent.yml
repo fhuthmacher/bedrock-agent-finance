@@ -40,7 +40,7 @@ Parameters:
   AgentFoundationModel:
     Description: Amazon Bedrock Agent Foundation Model
     Type: String
-    Default: 'anthropic.claude-instant-v1'
+    Default: 'anthropic.claude-v2'
   AgentName:
     Description: Amazon Bedrock Agent Name
     Type: String
@@ -48,7 +48,7 @@ Parameters:
   AgentInstruction:
     Description: Amazon Bedrock Agent Instruction
     Type: String
-    Default: 'Agent Finance is an AI-powered agent that helps customers by retrieving financial information about companies and retrieving a users existing portfolio.'
+    Default: 'Agent Finance is an automated, AI-powered agent that provides investment advice based on a company's current stock price and financial news'
   AgentActionGroupName:
     Description: Amazon Bedrock Agent ActionGroupName
     Type: String
@@ -56,7 +56,7 @@ Parameters:
   AgentActionGroupDescription:
     Description: Amazon Bedrock Agent Instruction
     Type: String
-    Default: 'Retrieves financial information and a users existing investment portfolio.'
+    Default: 'investment research providing stock prices and financial news for a given company'
   KnowledgeBaseName:
     Description: Amazon Bedrock KnowledgeBase Name
     Type: String
