@@ -2,6 +2,8 @@
 
 Welcome to the Amazon Bedrock Agents Tutorial. In this tutorial, you will first learn how to create a chat application that retrieves financial information from the internet for a given company to provide investment advice leveraging an Amazon Bedrock agent dubbed "Agent Finance". Then we will instrument the application and incorporate observability with Amazon OpenSearch.
 
+The full tutorial can be found on [Medium](https://medium.com/@fhuthmacher/observability-with-llm-agents-a02b0800dc40).
+
 By the end of this tutorial, you will have gained valuable hands-on experience in building Amazon Bedrock Agents and incorporating observability.
 
 ![Agent Architecture Diagram](/images/agent_arch.png)
